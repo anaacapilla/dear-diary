@@ -1,0 +1,33 @@
+# Entornos virtuales
+venv/
+.venv/
+env/
+
+# Secretos y credenciales
+.env
+
+# Caché interna de uv
+.uv/
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Base de datos y audios de prueba
+*.db
+*.sqlite3
+*.ogg
+*.mp3
+*.wav
+downloads/
+audios/
+
+# Modelos y cachés pesados (Whisper / HuggingFace)
+models/
+.cache/
+__pycache__/
+*.pyc
+
+# Archivos de entorno de IDEs
+.vscode/
+.idea/
