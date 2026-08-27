@@ -68,6 +68,8 @@ def transcribir(ruta):
 
     resultado = transcriber(
         str(ruta),
+        chunk_length_s=30,
+        stride_length_s=5,
         return_timestamps=True,
         generate_kwargs={
             "language": "es",

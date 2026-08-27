@@ -41,7 +41,12 @@ TELEGRAM_BOT_TOKEN="tu_token_aqui"
 OPENAI_API_KEY="tu_key_aqui"
 DATABASE_URL="sqlite:///diary.db"
 
-uv run python src/bot.py
+# Ejecuta desde la raíz del repositorio y deja el bot escuchando
+uv run python -m src.bot
+
+Los secretos deben guardarse únicamente en `.env`, que está excluido de Git.
+El bot utiliza `TELEGRAM_BOT_TOKEN`; las variables que no consume el código
+actual pueden omitirse.
 
 .
 ├── src/

@@ -1,4 +1,5 @@
 import os
+import asyncio
 from dotenv import load_dotenv
 from pathlib import Path
 import logging
@@ -18,7 +19,8 @@ from src.database import inicializar_db, guardar_entrada
 # CONFIGURACIÓN
 # ============================================================
 
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -27,10 +29,8 @@ if not TELEGRAM_TOKEN:
         "No se ha encontrado la variable de entorno TELEGRAM_BOT_TOKEN"
     )
 
-AUDIO_DIR = Path("audios")
+AUDIO_DIR = PROJECT_ROOT / "audios"
 AUDIO_DIR.mkdir(exist_ok=True)
-
-DB_PATH = Path("diary.db")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -114,8 +114,10 @@ async def recibir_audio(
     elif update.message.audio:
         archivo_telegram = update.message.audio
         nombre = (
-            archivo_telegram.file_name
-            or f"{archivo_telegram.file_id}.mp3"
+            Path(
+                archivo_telegram.file_name
+                or f"{archivo_telegram.file_id}.mp3"
+            ).name
         )
 
     else:
@@ -139,7 +141,7 @@ async def recibir_audio(
         )
 
         # Transcribir
-        texto = transcribir(ruta)
+        texto = await asyncio.to_thread(transcribir, ruta)
 
         logger.info("📝 ¡Transcripción completada!")
 
