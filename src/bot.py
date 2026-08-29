@@ -4,6 +4,23 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+from src.config import (
+    AUDIO_DIR,
+    LOG_LEVEL,
+    OLLAMA_MODEL,
+    TELEGRAM_BOT_TOKEN,
+    TELEGRAM_USER_ID,
+    WHISPER_MODEL,
+)
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
+)
+
+logger = logging.getLogger(__name__)
+logger.info("Iniciando configuración de dear-diary")
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -13,14 +30,6 @@ from telegram.ext import (
     filters,
 )
 
-from src.config import (
-    AUDIO_DIR,
-    LOG_LEVEL,
-    OLLAMA_MODEL,
-    TELEGRAM_BOT_TOKEN,
-    TELEGRAM_USER_ID,
-    WHISPER_MODEL,
-)
 from src.database import inicializar_db, guardar_entrada
 from src.llm.extractor import DiaryExtractor
 from src.llm.prompts import PROMPT_VERSION
@@ -32,14 +41,10 @@ from src.transcriber import transcribir
 
 AUDIO_DIR.mkdir(exist_ok=True)
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
-)
-
-logger = logging.getLogger(__name__)
-
+logger.info("Directorio de audios preparado: %s", AUDIO_DIR)
+logger.info("Inicializando extractor LLM con modelo %s", OLLAMA_MODEL)
 diary_extractor = DiaryExtractor()
+logger.info("Extractor LLM preparado")
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 

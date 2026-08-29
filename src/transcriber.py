@@ -18,10 +18,14 @@ logger = logging.getLogger(__name__)
 
 MODEL_NAME = WHISPER_MODEL
 
+logger.info("Comprobando disponibilidad de CUDA")
 if torch.cuda.is_available():
     DEVICE = "cuda:0"
     DTYPE = torch.float16
-    logger.info("GPU CUDA detectada. Usando GPU.")
+    logger.info(
+        "GPU CUDA detectada: %s. Usando GPU.",
+        torch.cuda.get_device_name(0),
+    )
 
 else:
     DEVICE = "cpu"
@@ -34,6 +38,7 @@ else:
 # ============================================================
 
 logger.info("Cargando modelo Whisper: %s", MODEL_NAME)
+logger.info("Descargando o leyendo desde caché los pesos de Whisper")
 
 model = AutoModelForSpeechSeq2Seq.from_pretrained(
     MODEL_NAME,
@@ -41,11 +46,14 @@ model = AutoModelForSpeechSeq2Seq.from_pretrained(
     low_cpu_mem_usage=True,
     use_safetensors=True,
 )
+logger.info("Pesos de Whisper cargados; moviendo modelo a %s", DEVICE)
 
 model.to(DEVICE)
 
+logger.info("Cargando procesador Whisper")
 processor = AutoProcessor.from_pretrained(MODEL_NAME)
 
+logger.info("Creando pipeline de transcripción")
 transcriber = pipeline(
     "automatic-speech-recognition",
     model=model,
@@ -61,6 +69,7 @@ logger.info("Whisper listo 🚀")
 # ============================================================
 # TRANSCRIPCIÓN
 # ============================================================
+
 
 def transcribir(ruta):
 
