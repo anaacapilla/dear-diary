@@ -40,6 +40,7 @@ cp .env.example .env
 TELEGRAM_BOT_TOKEN="tu_token_aqui"
 OPENAI_API_KEY="tu_key_aqui"
 DATABASE_URL="sqlite:///diary.db"
+DATABASE_PATH="dear_diary.db"
 
 # Ejecuta desde la raíz del repositorio y deja el bot escuchando
 uv run python -m src.bot

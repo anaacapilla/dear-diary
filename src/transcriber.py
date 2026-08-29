@@ -1,13 +1,13 @@
+import logging
 import os
 
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
-
-import logging
 
 import torch
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
 from transformers import pipeline
 
+from src.config import WHISPER_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # CONFIGURACIÓN
 # ============================================================
 
-MODEL_NAME = "openai/whisper-base"
+MODEL_NAME = WHISPER_MODEL
 
 if torch.cuda.is_available():
     DEVICE = "cuda:0"

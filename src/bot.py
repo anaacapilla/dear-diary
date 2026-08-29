@@ -1,8 +1,8 @@
-import os
 import asyncio
-from dotenv import load_dotenv
-from pathlib import Path
 import logging
+import time
+from pathlib import Path
+from datetime import datetime
 
 from telegram import Update
 from telegram.ext import (
@@ -13,33 +13,66 @@ from telegram.ext import (
     filters,
 )
 
-from src.transcriber import transcribir
+from src.config import (
+    AUDIO_DIR,
+    LOG_LEVEL,
+    OLLAMA_MODEL,
+    TELEGRAM_BOT_TOKEN,
+    WHISPER_MODEL,
+)
 from src.database import inicializar_db, guardar_entrada
+from src.llm.extractor import DiaryExtractor
+from src.llm.prompts import PROMPT_VERSION
+from src.transcriber import transcribir
+
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-if not TELEGRAM_TOKEN:
-    raise ValueError(
-        "No se ha encontrado la variable de entorno TELEGRAM_BOT_TOKEN"
-    )
-
-AUDIO_DIR = PROJECT_ROOT / "audios"
 AUDIO_DIR.mkdir(exist_ok=True)
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
+    level=getattr(logging, LOG_LEVEL.upper(), logging.INFO),
 )
 
 logger = logging.getLogger(__name__)
 
+diary_extractor = DiaryExtractor()
+
 logging.getLogger("httpx").setLevel(logging.WARNING)
+
+
+def formatear_informe(
+    transcription,
+    analysis,
+    transcription_time,
+    llm_time,
+):
+    emotions = ", ".join(analysis.emotions) or "Ninguna"
+    places = ", ".join(analysis.places) or "Ninguno"
+    people = ", ".join(analysis.people) or "Ninguna"
+    total_time = transcription_time + llm_time
+
+    return (
+        "📔 Nueva entrada guardada\n\n"
+        "📝 Transcripción\n"
+        f"{transcription}\n\n"
+        "✨ Resumen\n"
+        f"{analysis.summary}\n\n"
+        "💭 Sentimiento\n"
+        f"{analysis.sentiment}\n\n"
+        "🎨 Emociones\n"
+        f"{emotions}\n\n"
+        "📍 Lugares\n"
+        f"{places}\n\n"
+        "👥 Personas\n"
+        f"{people}\n\n"
+        "⏱️ Tiempo de procesamiento\n"
+        f"Transcripción: {transcription_time:.2f} s\n"
+        f"Análisis LLM: {llm_time:.2f} s\n"
+        f"Total: {total_time:.2f} s"
+    )
 
 # ============================================================
 # COMANDOS
@@ -104,6 +137,7 @@ async def recibir_audio(
         return
 
     logger.info("📥 Audio recibido")
+    received_at = datetime.now().astimezone().isoformat()
 
     # Nota de voz de Telegram
     if update.message.voice:
@@ -141,25 +175,59 @@ async def recibir_audio(
         )
 
         # Transcribir
+        transcription_start = time.perf_counter()
         texto = await asyncio.to_thread(transcribir, ruta)
+        transcription_time = time.perf_counter() - transcription_start
 
         logger.info("📝 ¡Transcripción completada!")
 
         if texto:
-            hash_entrada = guardar_entrada(
-                texto=texto,
-                # user_id=update.effective_user.id,
-                tipo="audio",
+            await update.message.reply_text(
+                "🧠 Analizando la entrada..."
+            )
+
+            llm_start = time.perf_counter()
+            analysis = await asyncio.to_thread(
+                diary_extractor.extract,
+                texto,
+            )
+            llm_time = time.perf_counter() - llm_start
+
+            recorded_at = update.message.date.astimezone().isoformat()
+            entity_values = [
+                ("person", value) for value in analysis.people
+            ] + [
+                ("place", value) for value in analysis.places
+            ]
+
+            entry_id = guardar_entrada(
+                transcription=texto,
+                received_at=received_at,
+                recorded_at=recorded_at,
+                audio_path=str(ruta),
+                summary=analysis.summary,
+                sentiment=analysis.sentiment,
+                events=analysis.events,
+                transcription_model=WHISPER_MODEL,
+                llm_model=OLLAMA_MODEL,
+                llm_prompt_version=PROMPT_VERSION,
+                entities=entity_values,
+                emotions=analysis.emotions,
             )
 
             logger.info(
                 "Entrada guardada: %s",
-                hash_entrada
+                entry_id,
             )
 
-            await update.message.reply_text(
-                f"📝 {texto}"
-    )
+            informe = formatear_informe(
+                transcription=texto,
+                analysis=analysis,
+                transcription_time=transcription_time,
+                llm_time=llm_time,
+            )
+            print(informe)
+            await update.message.reply_text(informe)
         else:
             await update.message.reply_text(
                 "No he podido detectar texto en el audio."
@@ -172,11 +240,11 @@ async def recibir_audio(
             "❌ Ha ocurrido un error al procesar el audio."
         )
 
-    finally:
-        # Borrar el audio después de procesarlo
-        if ruta.exists():
-            ruta.unlink()
-            logger.info(f"🗑️ Eliminado: {ruta}")
+    # finally:
+    #     # Borrar el audio después de procesarlo
+    #     if ruta.exists():
+    #         ruta.unlink()
+    #         logger.info(f"🗑️ Eliminado: {ruta}")
 
 
 # ============================================================
@@ -192,7 +260,7 @@ if __name__ == "__main__":
 
     logger.info("Iniciando bot...")
 
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # Comandos
     app.add_handler(CommandHandler("start", start))
