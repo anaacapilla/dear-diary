@@ -17,6 +17,7 @@ def get_env(name: str, default: str | None = None, *, required: bool = False) ->
 
 
 TELEGRAM_BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN", required=True)
+TELEGRAM_USER_ID = int(get_env("TELEGRAM_USER_ID", required=True))
 OLLAMA_MODEL = get_env("OLLAMA_MODEL", "qwen3:1.7b") or "qwen3:1.7b"
 WHISPER_MODEL = get_env("WHISPER_MODEL", "openai/whisper-base") or "openai/whisper-base"
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO") or "INFO"

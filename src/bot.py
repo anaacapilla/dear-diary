@@ -18,6 +18,7 @@ from src.config import (
     LOG_LEVEL,
     OLLAMA_MODEL,
     TELEGRAM_BOT_TOKEN,
+    TELEGRAM_USER_ID,
     WHISPER_MODEL,
 )
 from src.database import inicializar_db, guardar_entrada
@@ -74,11 +75,19 @@ def formatear_informe(
         f"Total: {total_time:.2f} s"
     )
 
+
+def usuario_autorizado(update: Update) -> bool:
+    user = update.effective_user
+    return user is not None and user.id == TELEGRAM_USER_ID
+
 # ============================================================
 # COMANDOS
 # ============================================================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not usuario_autorizado(update):
+        return
+
     # Al iniciar/reiniciar, desactivamos la recepción de audios
     context.user_data["recibiendo_audio"] = False
 
@@ -92,6 +101,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not usuario_autorizado(update):
+        return
+
     await update.message.reply_text(
         "Estos son los comandos disponibles:\n\n"
         "/start - Iniciar el bot\n"
@@ -105,6 +117,9 @@ async def activar_audio(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+    if not usuario_autorizado(update):
+        return
+
     context.user_data["recibiendo_audio"] = True
 
     await update.message.reply_text(
@@ -117,6 +132,9 @@ async def detener_audio(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+    if not usuario_autorizado(update):
+        return
+
     context.user_data["recibiendo_audio"] = False
 
     await update.message.reply_text(
@@ -132,6 +150,9 @@ async def recibir_audio(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+    if not usuario_autorizado(update):
+        return
+
     # Solo procesar audios si el usuario ha activado el modo
     if not context.user_data.get("recibiendo_audio", False):
         return

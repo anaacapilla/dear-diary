@@ -41,6 +41,7 @@ Copia `.env.example` como `.env` y configura las variables:
 
 ```env
 TELEGRAM_BOT_TOKEN=tu_token_de_telegram
+TELEGRAM_USER_ID=tu_id_de_telegram
 OLLAMA_MODEL=qwen3:1.7b
 WHISPER_MODEL=openai/whisper-base
 LOG_LEVEL=INFO
@@ -48,6 +49,8 @@ DATABASE_PATH=dear_diary.db
 ```
 
 `DATABASE_PATH` puede ser una ruta relativa o absoluta. Si se omite, la base se crea como `dear_diary.db` en la raíz del proyecto.
+
+`TELEGRAM_USER_ID` debe contener el identificador numérico de la cuenta de Telegram autorizada. El bot ignora cualquier interacción procedente de otro usuario, sin responder ni procesar el contenido.
 
 ## Ejecución
 
