@@ -257,15 +257,17 @@ if __name__ == "__main__":
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    async def enviar_bienvenida_inicial() -> None:
+    async def enviar_bienvenida_inicial(application: Application) -> None:
         try:
-            await app.bot.send_message(
+            await application.bot.send_message(
                 chat_id=TELEGRAM_USER_ID,
                 text=MENSAJE_BIENVENIDA,
             )
             logger.info("✅ Mensaje de bienvenida enviado al arrancar")
         except Exception:
             logger.exception("❌ No se pudo enviar el mensaje de bienvenida inicial")
+
+    app.post_init = enviar_bienvenida_inicial
 
     # Comandos
     app.add_handler(CommandHandler("start", start))
@@ -282,5 +284,4 @@ if __name__ == "__main__":
     logger.info("Bot configurado 🤖")
     logger.info("🤖 Bot iniciado y escuchando...")
 
-    asyncio.run(enviar_bienvenida_inicial())
     app.run_polling()
