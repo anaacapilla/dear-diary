@@ -1,7 +1,17 @@
 import ast
+import importlib.util
 from pathlib import Path
 
 BOT_FILE = Path(__file__).resolve().parents[1] / "src" / "bot.py"
+
+
+class DummyAnalysis:
+    def __init__(self):
+        self.summary = "Resumen breve"
+        self.sentiment = "positivo"
+        self.emotions = ["felicidad", "calma"]
+        self.places = ["casa"]
+        self.people = ["Ana"]
 
 
 def _has_asyncio_run_call(source: str) -> bool:
@@ -16,6 +26,14 @@ def _has_asyncio_run_call(source: str) -> bool:
     return False
 
 
+def _load_bot_module():
+    spec = importlib.util.spec_from_file_location("dear_diary_bot_under_test", BOT_FILE)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_bot_uses_post_init_instead_of_asyncio_run():
     source = BOT_FILE.read_text(encoding="utf-8")
 
@@ -27,3 +45,22 @@ def test_bot_uses_post_init_instead_of_asyncio_run():
         "La bienvenida inicial debe registrarse con post_init para ejecutar "
         "en el mismo loop que usa Telegram."
     )
+
+
+def test_formatear_informe_omits_raw_transcription_for_telegram_limit():
+    bot_module = _load_bot_module()
+    long_transcription = "A " * 5000
+    dummy_analysis = DummyAnalysis()
+    dummy_analysis.summary = "A " * 5000
+    result = bot_module.formatear_informe(
+        long_transcription,
+        dummy_analysis,
+        1.5,
+        2.2,
+    )
+
+    assert "Transcripción" not in result
+    assert "Resumen" in result
+    assert "Sentimiento" in result
+    assert "..." in result
+    assert len(result) < 4096

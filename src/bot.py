@@ -49,23 +49,42 @@ logger.info("Extractor LLM preparado")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+MAX_TELEGRAM_MESSAGE_CHARS = 800
+
+
+def truncar_texto(texto: str, max_chars: int = MAX_TELEGRAM_MESSAGE_CHARS) -> str:
+    if texto is None:
+        return ""
+
+    texto = texto.strip()
+    if len(texto) <= max_chars:
+        return texto
+
+    if max_chars <= 3:
+        return texto[:max_chars]
+
+    return f"{texto[: max_chars - 3].rstrip()}..."
+
+
 def formatear_informe(
     transcription,
     analysis,
     transcription_time,
     llm_time,
 ):
+    # Telegram tiene un límite duro de longitud por mensaje; la transcripción
+    # completa puede excederlo, así que se omite del reporte al usuario y se
+    # mantiene solo el resumen truncado y los datos estructurados más relevantes.
     emotions = ", ".join(analysis.emotions) or "Ninguna"
     places = ", ".join(analysis.places) or "Ninguno"
     people = ", ".join(analysis.people) or "Ninguna"
+    summary = truncar_texto(analysis.summary or "Sin resumen disponible.")
     total_time = transcription_time + llm_time
 
     return (
         "📔 Nueva entrada guardada\n\n"
-        "📝 Transcripción\n"
-        f"{transcription}\n\n"
         "✨ Resumen\n"
-        f"{analysis.summary}\n\n"
+        f"{summary}\n\n"
         "💭 Sentimiento\n"
         f"{analysis.sentiment}\n\n"
         "🎨 Emociones\n"
@@ -75,7 +94,7 @@ def formatear_informe(
         "👥 Personas\n"
         f"{people}\n\n"
         "⏱️ Tiempo de procesamiento\n"
-        f"Transcripción: {transcription_time:.2f} s\n"
+        f"Procesamiento: {transcription_time:.2f} s\n"
         f"Análisis LLM: {llm_time:.2f} s\n"
         f"Total: {total_time:.2f} s"
     )
