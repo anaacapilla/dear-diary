@@ -12,5 +12,23 @@ dependencies = [
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.2",
     "python-telegram-bot>=22.8",
+    "torch==2.11.0",
+    "torchaudio==2.11.0",
+    "torchvision==0.26.0",
     "transformers>=4.57.0",
+]
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/cu128"
+name = "pytorch"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+torchaudio = { index = "pytorch" }
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
 ]
