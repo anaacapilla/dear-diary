@@ -62,18 +62,25 @@ uv run python -m src.bot
 
 En Telegram:
 
-- `/start`: inicia el bot y desactiva la recepción de audios.
+- `/start`: inicia el bot y envía el mensaje de bienvenida.
 - `/help`: muestra los comandos disponibles.
-- `/activar_audio`: activa la recepción de audios.
-- `/detener_audio`: desactiva la recepción de audios.
 
-Después de activar el modo de audio, envía una nota de voz o un archivo de audio. El bot descargará el archivo en `audios/`, lo transcribirá, analizará el texto y enviará un informe resumen.
+Cuando el bot se levanta, manda automáticamente un mensaje de bienvenida y queda escuchando para recibir notas de voz o archivos de audio sin necesidad de activar ningún modo manual.
+
+Envía una nota de voz o un archivo de audio. El bot descargará el archivo en `audios/`, lo transcribirá, analizará el texto y enviará un informe resumen.
+
+## Comportamiento actual del bot
+
+- El bot manda una bienvenida automática al arrancar.
+- El usuario no tiene que activar ni desactivar la escucha de audio.
+- La recepción de audios está siempre habilitada para la conversación autorizada.
+- El comando `/help` sigue disponible para ver la ayuda básica.
 
 ## Scripts y módulos
 
 | Archivo | Responsabilidad |
 | --- | --- |
-| [`src/bot.py`](src/bot.py) | Configura Telegram, gestiona comandos y audios, coordina transcripción, análisis, persistencia e informe final. |
+| [`src/bot.py`](src/bot.py) | Configura Telegram, gestiona comandos y audios, manda la bienvenida inicial, coordina transcripción, análisis, persistencia e informe final. |
 | [`src/config.py`](src/config.py) | Carga `.env` y centraliza modelos, nivel de logs, directorio de audios y ruta de SQLite. |
 | [`src/transcriber.py`](src/transcriber.py) | Carga Whisper y convierte un archivo de audio en texto en español. |
 | [`src/llm/extractor.py`](src/llm/extractor.py) | Llama a Ollama y valida la respuesta con `DiaryAnalysis`. |

@@ -89,20 +89,21 @@ def usuario_autorizado(update: Update) -> bool:
 # COMANDOS
 # ============================================================
 
+MENSAJE_BIENVENIDA = (
+    "¡Hola! Soy tu dear-diary bot 🤖\n\n"
+    "Estoy preparado para ayudarte a registrar tus "
+    "pensamientos y emociones.\n\n"
+    "La recepción de audio está activada automáticamente y "
+    "ya estoy escuchando para guardar tus ideas."
+)
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not usuario_autorizado(update):
         return
 
-    # Al iniciar/reiniciar, desactivamos la recepción de audios
-    context.user_data["recibiendo_audio"] = False
-
-    await update.message.reply_text(
-        "¡Hola! Soy tu dear-diary bot 🤖\n\n"
-        "Estoy preparado para ayudarte a registrar tus "
-        "pensamientos y emociones.\n\n"
-        "Comienza activando el modo de recepción de audios "
-        "para empezar a registrar tus ideas."
-    )
+    context.user_data["recibiendo_audio"] = True
+    await update.message.reply_text(MENSAJE_BIENVENIDA)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,38 +113,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Estos son los comandos disponibles:\n\n"
         "/start - Iniciar el bot\n"
-        "/help - Mostrar esta ayuda\n"
-        "/activar_audio - Activar recepción de audios\n"
-        "/detener_audio - Dejar de recibir audios"
-    )
-
-
-async def activar_audio(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    if not usuario_autorizado(update):
-        return
-
-    context.user_data["recibiendo_audio"] = True
-
-    await update.message.reply_text(
-        "🎙️ Recepción de audio activada.\n"
-        "Envíame un audio y lo transcribiré."
-    )
-
-
-async def detener_audio(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    if not usuario_autorizado(update):
-        return
-
-    context.user_data["recibiendo_audio"] = False
-
-    await update.message.reply_text(
-        "🎙️ Recepción de audio desactivada."
+        "/help - Mostrar esta ayuda"
     )
 
 
@@ -158,8 +128,7 @@ async def recibir_audio(
     if not usuario_autorizado(update):
         return
 
-    # Solo procesar audios si el usuario ha activado el modo
-    if not context.user_data.get("recibiendo_audio", False):
+    if context.user_data.get("recibiendo_audio", True) is False:
         return
 
     logger.info("📥 Audio recibido")
@@ -288,15 +257,19 @@ if __name__ == "__main__":
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
+    async def enviar_bienvenida_inicial() -> None:
+        try:
+            await app.bot.send_message(
+                chat_id=TELEGRAM_USER_ID,
+                text=MENSAJE_BIENVENIDA,
+            )
+            logger.info("✅ Mensaje de bienvenida enviado al arrancar")
+        except Exception:
+            logger.exception("❌ No se pudo enviar el mensaje de bienvenida inicial")
+
     # Comandos
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(
-        CommandHandler("activar_audio", activar_audio)
-    )
-    app.add_handler(
-        CommandHandler("detener_audio", detener_audio)
-    )
 
     # Audios
     app.add_handler(
@@ -309,4 +282,5 @@ if __name__ == "__main__":
     logger.info("Bot configurado 🤖")
     logger.info("🤖 Bot iniciado y escuchando...")
 
+    asyncio.run(enviar_bienvenida_inicial())
     app.run_polling()
