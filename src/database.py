@@ -97,7 +97,7 @@ def guardar_entrada(
 
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
-            INSERT INTO diary_entries (
+            INSERT OR IGNORE INTO diary_entries (
                 id,
                 hash,
                 created_at,
@@ -128,6 +128,15 @@ def guardar_entrada(
             llm_model,
             llm_prompt_version,
         ))
+
+        existing_entry = conn.execute(
+            "SELECT id FROM diary_entries WHERE hash = ?",
+            (hash_entrada,),
+        ).fetchone()
+
+        if existing_entry is not None:
+            conn.commit()
+            return existing_entry[0]
 
         for entity_type, entity_value in entities or []:
             entity_id = str(uuid.uuid4())

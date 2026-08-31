@@ -2,6 +2,8 @@ import ast
 import importlib.util
 from pathlib import Path
 
+import src.database as database
+
 BOT_FILE = Path(__file__).resolve().parents[1] / "src" / "bot.py"
 
 
@@ -64,3 +66,30 @@ def test_formatear_informe_omits_raw_transcription_for_telegram_limit():
     assert "Sentimiento" in result
     assert "..." in result
     assert len(result) < 4096
+
+
+def test_guardar_entrada_ignores_duplicate_transcription_hash(tmp_path, monkeypatch):
+    db_path = tmp_path / "diary.db"
+    monkeypatch.setattr(database, "DB_PATH", db_path)
+
+    database.inicializar_db()
+
+    first = database.guardar_entrada(
+        "mismo texto",
+        received_at="2026-08-30T11:00:00+00:00",
+        recorded_at="2026-08-30T11:00:00+00:00",
+        summary="Resumen",
+        sentiment="positivo",
+        events=["evento"],
+    )
+
+    second = database.guardar_entrada(
+        "mismo texto",
+        received_at="2026-08-30T11:05:00+00:00",
+        recorded_at="2026-08-30T11:05:00+00:00",
+        summary="Resumen nuevo",
+        sentiment="positivo",
+        events=["evento"],
+    )
+
+    assert first == second
