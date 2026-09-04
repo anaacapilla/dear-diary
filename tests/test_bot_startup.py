@@ -1,6 +1,7 @@
 import ast
 import importlib.util
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import src.database as database
 
@@ -93,3 +94,107 @@ def test_guardar_entrada_ignores_duplicate_transcription_hash(tmp_path, monkeypa
     )
 
     assert first == second
+
+
+def test_daily_report_uses_single_summary_for_one_entry(tmp_path, monkeypatch):
+    db_path = tmp_path / "diary.db"
+    monkeypatch.setattr(database, "DB_PATH", db_path)
+
+    database.inicializar_db()
+
+    database.guardar_entrada(
+        "texto de una entrada",
+        received_at="2026-08-30T11:00:00+00:00",
+        recorded_at="2026-08-30T11:00:00+00:00",
+        summary="Resumen único del día",
+        sentiment="positivo",
+        events=["evento único"],
+    )
+
+    report = database.obtener_reporte_diario("2026-08-30")
+
+    assert report["entries_count"] == 1
+    assert report["summary"] == "Resumen único del día"
+
+
+def test_daily_report_aggregates_summaries_for_multiple_entries(tmp_path, monkeypatch):
+    db_path = tmp_path / "diary.db"
+    monkeypatch.setattr(database, "DB_PATH", db_path)
+
+    database.inicializar_db()
+
+    database.guardar_entrada(
+        "texto uno",
+        received_at="2026-08-30T09:00:00+00:00",
+        recorded_at="2026-08-30T09:00:00+00:00",
+        summary="Resumen de la mañana",
+        sentiment="positivo",
+        events=["evento uno"],
+    )
+
+    database.guardar_entrada(
+        "texto dos",
+        received_at="2026-08-30T18:00:00+00:00",
+        recorded_at="2026-08-30T18:00:00+00:00",
+        summary="Resumen de la tarde",
+        sentiment="negativo",
+        events=["evento dos"],
+    )
+
+    report = database.obtener_reporte_diario("2026-08-30")
+
+    assert report["entries_count"] == 2
+    assert "Resumen de la mañana" in report["summary"]
+    assert "Resumen de la tarde" in report["summary"]
+
+
+def test_obtener_dias_con_entradas_del_mes(tmp_path, monkeypatch):
+    db_path = tmp_path / "diary.db"
+    monkeypatch.setattr(database, "DB_PATH", db_path)
+
+    database.inicializar_db()
+
+    database.guardar_entrada(
+        "texto uno",
+        received_at="2026-08-10T09:00:00+00:00",
+        recorded_at="2026-08-10T09:00:00+00:00",
+        summary="Resumen 10",
+        sentiment="positivo",
+        events=["evento uno"],
+    )
+
+    database.guardar_entrada(
+        "texto dos",
+        received_at="2026-08-12T18:00:00+00:00",
+        recorded_at="2026-08-12T18:00:00+00:00",
+        summary="Resumen 12",
+        sentiment="negativo",
+        events=["evento dos"],
+    )
+
+    days = database.obtener_dias_con_entradas_del_mes(2026, 8)
+
+    assert "2026-08-10" in days
+    assert "2026-08-12" in days
+    assert len(days) == 2
+
+
+def test_help_command_mentions_only_report_command():
+    bot_module = _load_bot_module()
+
+    update = type(
+        "DummyUpdate",
+        (),
+        {
+            "message": type("DummyMessage", (), {"reply_text": AsyncMock()})(),
+            "effective_user": type("DummyUser", (), {"id": 8028882})(),
+        },
+    )()
+
+    import asyncio
+    asyncio.run(bot_module.help_command(update, None))
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.await_args.args[0]
+    assert "/report YYYY-MM-DD" in text
+    assert "/ping" not in text

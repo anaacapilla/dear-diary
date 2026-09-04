@@ -21,7 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info("Iniciando configuración de dear-diary")
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -30,7 +30,11 @@ from telegram.ext import (
     filters,
 )
 
-from src.database import inicializar_db, guardar_entrada
+from src.database import (
+    guardar_entrada,
+    inicializar_db,
+    obtener_reporte_diario,
+)
 from src.llm.extractor import DiaryExtractor
 from src.llm.prompts import PROMPT_VERSION
 from src.transcriber import transcribir
@@ -100,9 +104,44 @@ def formatear_informe(
     )
 
 
+def formatear_reporte_diario(reporte):
+    summary = truncar_texto(reporte["summary"] or "Sin resumen disponible.")
+    emociones = ", ".join(reporte.get("emotions") or []) or "Ninguna"
+    lugares = ", ".join(reporte.get("places") or []) or "Ninguno"
+    personas = ", ".join(reporte.get("people") or []) or "Ninguna"
+
+    return (
+        "📅 Reporte del día\n\n"
+        f"📌 Fecha: {reporte['report_date']}\n"
+        f"📝 Entradas del día: {reporte['entries_count']}\n\n"
+        "✨ Resumen\n"
+        f"{summary}\n\n"
+        "💭 Sentimiento\n"
+        f"{reporte.get('sentiment', 'neutral')}\n\n"
+        "🎨 Emociones\n"
+        f"{emociones}\n\n"
+        "📍 Lugares\n"
+        f"{lugares}\n\n"
+        "👥 Personas\n"
+        f"{personas}"
+    )
+
+
 def usuario_autorizado(update: Update) -> bool:
     user = update.effective_user
-    return user is not None and user.id == TELEGRAM_USER_ID
+    if user is None:
+        logger.warning("Update sin effective_user; no se puede verificar autorización")
+        return False
+
+    if user.id != TELEGRAM_USER_ID:
+        logger.warning(
+            "Usuario no autorizado: recibido=%s, esperado=%s",
+            user.id,
+            TELEGRAM_USER_ID,
+        )
+        return False
+
+    return True
 
 # ============================================================
 # COMANDOS
@@ -121,7 +160,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not usuario_autorizado(update):
         return
 
-    context.user_data["recibiendo_audio"] = True
     await update.message.reply_text(MENSAJE_BIENVENIDA)
 
 
@@ -130,10 +168,43 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "Estos son los comandos disponibles:\n\n"
+        "Comandos disponibles:\n\n"
         "/start - Iniciar el bot\n"
-        "/help - Mostrar esta ayuda"
+        "/help - Mostrar esta ayuda\n"
+        "/report YYYY-MM-DD - Ver el reporte diario de una fecha"
     )
+
+
+async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not usuario_autorizado(update):
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "Uso: /report YYYY-MM-DD\n\nEjemplo: /report 2026-08-30"
+        )
+        return
+
+    fecha = context.args[0]
+
+    try:
+        fecha_obj = datetime.fromisoformat(fecha)
+        fecha = fecha_obj.date().isoformat()
+    except ValueError:
+        await update.message.reply_text(
+            "Formato de fecha inválido. Usa YYYY-MM-DD, por ejemplo: /report 2026-08-30"
+        )
+        return
+
+    reporte = obtener_reporte_diario(fecha)
+
+    if reporte["entries_count"] == 0:
+        await update.message.reply_text(
+            f"No hay entradas registradas para el día {fecha}."
+        )
+        return
+
+    await update.message.reply_text(formatear_reporte_diario(reporte))
 
 
 # ============================================================
@@ -145,9 +216,6 @@ async def recibir_audio(
     context: ContextTypes.DEFAULT_TYPE
 ):
     if not usuario_autorizado(update):
-        return
-
-    if context.user_data.get("recibiendo_audio", True) is False:
         return
 
     logger.info("📥 Audio recibido")
@@ -278,6 +346,13 @@ if __name__ == "__main__":
 
     async def enviar_bienvenida_inicial(application: Application) -> None:
         try:
+            await application.bot.set_my_commands([
+                BotCommand("start", "Iniciar el bot"),
+                BotCommand("help", "Mostrar ayuda"),
+                BotCommand("report", "Ver el reporte de una fecha"),
+            ])
+            logger.info("✅ Comandos del bot registrados en el menú")
+
             await application.bot.send_message(
                 chat_id=TELEGRAM_USER_ID,
                 text=MENSAJE_BIENVENIDA,
@@ -291,6 +366,7 @@ if __name__ == "__main__":
     # Comandos
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("report", report_command))
 
     # Audios
     app.add_handler(
@@ -303,4 +379,4 @@ if __name__ == "__main__":
     logger.info("Bot configurado 🤖")
     logger.info("🤖 Bot iniciado y escuchando...")
 
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
