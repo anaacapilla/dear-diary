@@ -1,240 +1,200 @@
-# dear-diary
+# 📖 Dear Diary
 
-Diario de voz personal en Telegram. Recibe un audio en el chat privado autorizado,
-lo transcribe con faster-whisper, extrae resumen, sentimiento, emociones, personas,
-lugares y acontecimientos con Ollama y lo guarda en SQLite.
+### Tu día, contado con tu voz.
 
-## Instalación
+Un diario personal en el que envías audios por **Telegram** y consultas tus recuerdos
+desde una web con **Streamlit**. El audio se transcribe, se analiza y se guarda junto
+con su resumen, emociones, personas, lugares y acontecimientos.
 
-Requisitos: Python 3.12+, uv y Ollama ejecutándose con un modelo disponible.
+> 🎙️ **Cuenta tu día** → ✍️ **Se transcribe y analiza** → 🌸 **Revísalo en tu diario**
 
-```powershell
-uv sync --locked
-Copy-Item .env.example .env
-ollama pull qwen3:1.7b
-uv run python -m src.bot
-```
+## ✨ Qué puedes hacer
 
-Edita el token y el identificador numérico en .env antes de arrancar. No vuelvas a
-copiar el ejemplo sobre una configuración existente. El proyecto requiere un único
-proceso del bot por base de datos y token. No se debe iniciar otra instancia mientras
-la anterior está procesando entradas.
+| En Telegram | En la web |
+| --- | --- |
+| Enviar notas de voz y audios | Explorar las entradas en un calendario |
+| Seguir el progreso del procesamiento | Leer transcripciones, resúmenes y análisis |
+| Reintentar si ocurre un error | Corregir la transcripción de una entrada |
+| Recibir avisos de inicio y apagado del bot | Buscar por texto y fechas, y consultar estadísticas |
 
-Los valores predeterminados son Europe/Madrid y siete días de conservación de audios.
-Las rutas relativas de configuración se resuelven desde la raíz del proyecto.
-Usa un directorio dedicado para AUDIO_DIR y otro para BACKUP_DIR.
+## 🌱 Primeros pasos
 
-Whisper utiliza el identificador base, compatible con CTranslate2; el valor antiguo
-openai/whisper-base se traduce automáticamente a base para conservar la compatibilidad
-con .env existentes. El modelo se carga al transcribir el primer audio; puede
-descargar sus pesos si no están en caché. Las pruebas no lo cargan.
+Necesitas **Python 3.12 o superior**, **uv** y **Ollama**.
+Ejecuta los comandos desde la carpeta del proyecto.
 
-WHISPER_DEVICE=auto detecta CUDA mediante CTranslate2. Una GPU requiere las bibliotecas
-compatibles con la versión instalada de CTranslate2. Si no están disponibles, configura
-WHISPER_DEVICE=cpu y WHISPER_COMPUTE_TYPE=int8. PyTorch no es necesario para este bot.
-Los paquetes de notebooks están en el grupo opcional notebooks; para usarlos:
-uv sync --group notebooks. Los notebooks antiguos son exploratorios y pueden requerir
-sus propias dependencias adicionales.
-
-## Uso de Telegram
-
-Envía una nota de voz o un audio en tu chat privado. El bot confirma la recepción,
-indica cuántas entradas hay delante y actualiza un único mensaje mientras descarga,
-transcribe y analiza. Al terminar muestra «Entrada guardada» y un resumen breve.
-Si falla, conserva lo procesado y ofrece únicamente el botón Reintentar.
-Si no detecta voz, te pide enviar otro audio.
-
-El menú de comandos queda vacío. /start se conserva como respuesta mínima al botón
-Iniciar de Telegram: «Envíame un audio para añadir una entrada a tu diario».
-Los mensajes de texto y los comandos antiguos reciben esa misma orientación;
-no consultan, modifican ni borran entradas. La consulta y la edición se hacen en la web.
-Los botones antiguos se retiran al pulsarlos o cuando se actualiza su tarjeta.
-
-Al arrancar envía «Bot en marcha. Puedes enviarme audios». Si hay entradas
-interrumpidas, añade el aviso de recuperación al mismo mensaje. Al detenerlo de
-forma controlada (por ejemplo, con Ctrl+C), termina la entrada activa y envía
-«Bot detenido. No procesaré audios hasta que vuelva a arrancar» antes de cerrar
-la conexión con Telegram. Un cierre forzado, un corte eléctrico o la falta de
-conexión pueden impedir ese aviso. Se mantienen las copias y la limpieza
-automáticas, sin comandos de administración en Telegram.
-
-El bot acepta únicamente al usuario configurado, dentro de su chat privado.
-No responde con información del diario en grupos. Los archivos enviados como documentos
-genéricos no se admiten; se admiten notas de voz y mensajes de tipo audio de Telegram.
-
-## Procesamiento y recuperación
-
-Cada mensaje se identifica por chat_id + message_id. Volver a recibir el mismo mensaje
-no duplica una entrada, pero dos mensajes con las mismas palabras sí crean dos entradas.
-Sin identidad de Telegram, cada llamada de guardado crea una entrada independiente.
-
-1. Guarda una entrada pending con el identificador del archivo de Telegram.
-2. Confirma la recepción y añade la entrada a la cola. Un único trabajador descarga
-   el audio con un nombre UUID y renombrado atómico desde un archivo .part.
-3. Transcribe y guarda el texto antes de llamar al LLM: estado transcribed.
-4. Valida el JSON y guarda el análisis y todas sus relaciones en una transacción: completed.
-5. Si no hay voz, marca empty. Si falla una etapa, marca failed y conserva lo ya guardado.
-
-Un fallo de Ollama no borra la transcripción. Reintentar reutiliza el texto existente.
-Si todavía no hay transcripción y ya caducó el audio, intenta descargarlo otra vez de
-Telegram; la recuperación depende de que Telegram siga ofreciendo ese archivo.
-Al arrancar recupera automáticamente las entradas interrumpidas en estado pending
-o transcribed que tienen un mensaje de Telegram del usuario autorizado.
-Las entradas failed se reintentan desde el botón de su tarjeta. Las entradas antiguas
-sin destino de Telegram requieren gestión local; no se reintentan automáticamente.
-No se descartan las actualizaciones que Telegram tenga pendientes al reiniciar.
-El arranque solicita expresamente `message` y `callback_query` para recibir tanto
-audios como pulsaciones, aunque Telegram conserve un filtro de una ejecución anterior.
-Telegram no es una cola duradera ilimitada: conserva actualizaciones durante un periodo
-limitado, por lo que conviene mantener el bot ejecutándose.
-
-Se limitan tamaño y duración declarados del audio a 20 MB y 30 minutos por defecto.
-Una transcripción larga se analiza por bloques; los resúmenes se sintetizan de forma
-jerárquica sin recortar silenciosamente la entrada. Cada petición a Ollama tiene un
-timeout de 120 segundos y hasta dos intentos. La salida se valida con Pydantic.
-Las instrucciones incluidas en un diario se tratan como datos en el prompt, aunque
-esta separación y el esquema JSON no garantizan por sí solos la fidelidad semántica.
-
-Cada entrada conserva en SQLite el identificador de su mensaje editable, la
-transcripción original, las correcciones y las métricas. Se mantiene la migración
-compatible con las bases anteriores, con copia previa y sin borrar entradas.
-
-## Prueba manual: interfaz simplificada
-
-1. Detén la instancia anterior y arranca con `uv run python -m src.bot`.
-2. Comprueba que desaparece el menú de comandos y llega un único aviso «Bot en marcha».
-3. Pulsa Iniciar o envía /start: debe responder solo con la instrucción para enviar audio.
-4. Envía dos audios seguidos: el segundo debe indicar su posición en la cola.
-   Cada tarjeta se actualiza y termina con un resumen breve, sin botones de gestión.
-5. Envía un audio sin voz: debe pedir otro audio, sin botones de corrección.
-6. Provoca un fallo de Ollama y espera la tarjeta de error. Restablece el servicio
-   y pulsa Reintentar: debe reutilizar el texto y actualizar la misma tarjeta.
-   Pulsar varias veces no debe duplicar el trabajo.
-7. Pulsa un botón de gestión de una tarjeta antigua: debe orientar hacia la web
-   y mostrar la tarjeta simplificada sin ejecutar la acción antigua.
-8. Reinicia con entradas en cola: debe avisar de la recuperación y retomarlas.
-9. Guarda una corrección desde la web con el bot encendido: debe regenerarse
-   el análisis en la misma tarjeta de Telegram, sin añadir botones de gestión.
-10. Detén el bot con Ctrl+C: debe terminar la entrada activa, si la hay, y enviar
-    un único aviso «Bot detenido».
-
-## Reportes y fechas
-
-La lógica de reportes se conserva en la capa de datos; ya no se expone como comando
-de Telegram.
-
-Las fechas se convierten a Europe/Madrid antes de determinar el día, incluyendo los
-cambios de horario de verano. Fechas antiguas sin zona horaria se interpretan en esa
-zona. Si cambias DIARY_TIMEZONE, la agrupación se calcula de nuevo con la nueva zona.
-
-El reporte cuenta entradas completed y muestra el número de pendientes/fallidas.
-Una entrada usa su propio resumen. Varias entradas producen una síntesis LLM conjunta,
-que se guarda en daily_reports. El sentimiento global es el sentimiento común si
-todas coinciden, o mezclado si difieren. Personas, lugares y emociones se unen sin
-duplicados exactos. Si falla la síntesis, se muestran los resúmenes guardados y se
-informa de ello. No se presenta esa concatenación como una síntesis LLM.
-Una nueva entrada, una actualización o un borrado invalidan los reportes guardados.
-
-## Persistencia y migraciones
-
-SQLite contiene siete tablas: diary_entries, entities, entry_entities, emotions,
-entry_emotions, daily_reports y entry_edit_requests. Guardan las entradas y sus estados,
-entidades y emociones normalizadas, reportes derivados y la petición de corrección activa.
-
-La migración de esquema se hace al arrancar, con PRAGMA user_version. Antes de modificar
-una base antigua, crea una copia migration-*.sqlite3 junto a la base, en backups/.
-Conserva los identificadores, transcripciones y análisis existentes. Activa claves
-foráneas en todas las conexiones, aplica transacciones y cierra las conexiones.
-
-El antiguo campo hash pasa a identificar la entrada o mensaje para entradas nuevas;
-content_hash guarda la huella del texto sin imponer unicidad. Las filas antiguas
-conservan su hash. Un índice único evita duplicados por mensaje de Telegram.
-
-Las personas, lugares y emociones que la versión anterior nunca llegó a guardar no
-se pueden reconstruir con una migración de estructura. La transcripción puede
-corregirse desde la web para generar un nuevo análisis. Tampoco se pueden recuperar
-entradas que el antiguo hash descartó ni audios que ya fueron sobrescritos.
-
-## Conservación y copias
-
-- Los audios caducan a los siete días desde su recepción.
-- La limpieza se ejecuta al arrancar y cada hora mientras el bot está en marcha:
-  el borrado se produce en la siguiente ejecución tras caducar. Si está apagado,
-  se aplica al siguiente arranque.
-- La limpieza incluye audios antiguos ya existentes y archivos huérfanos del directorio
-  dedicado. Conserva las transcripciones y los análisis, y elimina la referencia al audio.
-- SQLite tiene una copia automática diaria durante el mantenimiento.
-  Se utiliza la API de backup de SQLite, no una copia insegura de un archivo abierto.
-- Copias automáticas, manuales y de migración caducan a los siete días; el control de
-  caducidad se ejecuta con el mantenimiento.
-- Borrar una entrada no reescribe copias anteriores. Estas pueden contenerla hasta
-  que caduquen. Las copias son locales y no incluyen los archivos de audio.
-
-El contenido se procesa localmente con Whisper y, por defecto, con Ollama local.
-El audio y las respuestas pasan por Telegram. No se escriben transcripciones,
-resúmenes ni cuerpos de excepciones en los logs de la aplicación.
-SQLite, audios y backups contienen información personal sin cifrado propio:
-deben quedar en una cuenta y disco con acceso controlado. .gitignore los excluye,
-pero no elimina archivos que ya estuvieran versionados.
-
-Para restaurar: detén el bot, conserva una copia del archivo actual y copia un backup
-sobre DATABASE_PATH; después arranca una única instancia. La restauración recupera
-SQLite, no los audios que hayan caducado. No sustituyas el archivo mientras esté abierto.
-
-## Pruebas y evaluación del TFM
-
-```powershell
-uv run python -m pytest -q
-```
-
-Las pruebas usan SQLite temporal, clientes simulados y credenciales ficticias.
-Cubren guardado de relaciones, deduplicación, medianoche y cambios de horario,
-migración y restauración, reintentos, límites de Telegram, privacidad, retención,
-síntesis, cola FIFO, recepción durante el procesamiento, recuperación al reiniciar,
-apagado, mensaje único, menú vacío, avisos de inicio y apagado, autorización y reintento
-desde botones, corrección desde la web y evaluación. No envían mensajes reales ni consumen modelos.
-
-El directorio evaluation contiene un corpus textual sintético inicial, un ejecutor
-con modelos reales y métricas reproducibles. Consulta evaluation/README.md.
-El corpus inicial sirve como comprobación, no como validación científica del TFM.
-
-## Web personal (primera versión)
-
-Instala el grupo opcional y arranca la web desde la raíz del proyecto:
+### 1. Instala las dependencias
 
 ```powershell
 uv sync --locked --group web
+```
+
+### 2. Configura tu diario
+
+Si todavía no tienes un archivo `.env`, créalo a partir del ejemplo:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Edita estos valores en `.env`:
+
+| Variable | Qué debes indicar |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | El token de tu bot de Telegram |
+| `TELEGRAM_USER_ID` | Tu identificador numérico de usuario |
+| `OLLAMA_MODEL` | El modelo de análisis; por defecto, `qwen3:1.7b` |
+
+**Conserva tu `.env` si ya existe:** no lo sobrescribas con el ejemplo ni lo subas a Git.
+El resto de opciones tiene valores predeterminados para empezar.
+
+### 3. Prepara el modelo de análisis
+
+Con Ollama instalado y en ejecución:
+
+```powershell
+ollama pull qwen3:1.7b
+```
+
+Si cambias el modelo en `.env`, descarga ese mismo modelo en Ollama.
+Whisper descarga sus pesos cuando los necesita por primera vez; el primer audio
+puede tardar más.
+
+## 🚀 Arrancar el diario
+
+Abre **dos terminales** en la carpeta del proyecto.
+
+### Terminal 1 · Bot de Telegram
+
+```powershell
+uv run python -m src.bot
+```
+
+Arranca primero el bot en el primer uso para que prepare la base de datos.
+Mantén una sola instancia del bot por token y base de datos.
+
+### Terminal 2 · Web de Streamlit
+
+```powershell
 uv run --group web streamlit run web_app.py
 ```
 
-Mantén la terminal abierta mientras uses la web;
-para detenerla, pulsa Ctrl+C. El acceso local funciona solo desde ese ordenador.
+Mantén las terminales abiertas mientras uses cada servicio. Para detener uno,
+pulsa **Ctrl+C** en su terminal. El bot deja terminar la entrada activa antes de cerrar.
 
-Puedes consultar las entradas guardadas sin arrancar el bot. Para recibir audios
-nuevos y regenerar los análisis tras una corrección, el bot debe estar funcionando
-también. El bot se ejecuta por separado con su comando habitual.
-Ambos leen DATABASE_PATH del mismo .env. Arranca primero el bot para inicializar o
-migrar la base; las consultas de la web abren SQLite en modo de solo lectura y no
-cargan Whisper ni Ollama. Guardar una corrección sí escribe en la base.
+| Quiero… | Qué debe estar funcionando |
+| --- | --- |
+| Consultar las entradas ya guardadas | Streamlit |
+| Recibir y procesar nuevos audios | Bot y Ollama |
+| Corregir el texto y regenerar su análisis | Streamlit, bot y Ollama |
 
-La barra lateral ofrece Entradas (calendario mensual y detalle del día), Buscador
-(coincidencia literal sin distinguir mayúsculas, con filtro de fechas) y Estadísticas
-(entradas por día, estados y sentimientos). Pulsa Actualizar datos para releer la base.
-Las fechas del calendario son fechas de envío, no fechas inferidas de acontecimientos.
-Los resultados se muestran de diez en diez. El calendario permite cambiar de mes
-con flechas o con los selectores de mes y año. Desde el detalle del calendario,
-Editar entrada permite corregir la transcripción completa, guardar o cancelar.
-Se conserva el original, se invalida el análisis anterior y el bot recoge las
-entradas pendientes cada cinco segundos para regenerarlo. Reinicia una vez el bot
-tras instalar esta actualización para activar esa recogida; si está apagado, las
-correcciones de entradas Telegram se recuperan al arrancar. Las entradas antiguas
-sin identidad Telegram requieren gestión local para regenerar su análisis. No se pueden editar entradas en proceso;
-una edición obsoleta no sobrescribe cambios posteriores.
-Las preguntas en lenguaje natural quedan pendientes de una siguiente fase.
-Telegram queda centrado en recibir audios y comunicar su procesamiento.
+La web funciona en el mismo ordenador y todavía no dispone de inicio de sesión.
 
-Por defecto solo escucha en la interfaz local y no tiene autenticación propia. Para acceder
-remotamente, usa un túnel SSH o acceso privado autenticado; no expongas el puerto
-públicamente. La web muestra contenido personal del diario.
+## 🎙️ Usar Telegram
 
-Pruebas incluyendo la interfaz: `uv run --group web python -m pytest -q`.
+1. Abre el chat privado con tu bot y envía una **nota de voz o un audio**.
+2. Recibirás una confirmación. Si hay más entradas esperando, verás cuántas tienes delante.
+3. Un único mensaje se actualizará durante la descarga, transcripción y análisis.
+4. Al terminar, aparecerá **Entrada guardada** con un resumen breve.
+
+Puedes enviar varios audios seguidos: se procesan por orden. Por defecto se admiten
+hasta **20 MB y 30 minutos** por audio. Los archivos enviados como documentos genéricos
+no se admiten.
+
+Si falla el procesamiento, pulsa **Reintentar**. La transcripción ya guardada se
+reutiliza; un fallo del análisis no la borra. Si no se detecta voz, envía otro audio.
+
+El bot atiende únicamente al usuario configurado en su chat privado. Al iniciarse y
+al detenerse de forma controlada envía un aviso; un cierre forzado o la falta de
+conexión pueden impedirlo. `/start` orienta sobre cómo enviar un audio; la consulta
+y la gestión de las entradas se realizan desde la web.
+
+## 🌸 Explorar la web
+
+### Entradas
+
+Navega por el calendario con las **flechas** o los selectores de **mes y año**.
+Los días con entradas están marcados: pulsa uno para ver lo almacenado.
+Las fechas corresponden al envío del audio, no necesariamente al día de lo que cuentas.
+
+En cada entrada puedes consultar la transcripción, el resumen, las emociones,
+las personas, los lugares y los acontecimientos detectados.
+
+**Editar entrada** permite corregir la transcripción completa y guardar o cancelar.
+El original se conserva y el análisis anterior se invalida. El bot recoge los cambios
+cada cinco segundos para regenerarlo; si está apagado, retomará las correcciones de
+entradas Telegram al arrancar. Las entradas antiguas sin identidad de Telegram
+requieren gestión local. No se pueden editar entradas pendientes o en procesamiento.
+
+### Buscador
+
+Busca palabras o frases en transcripciones, resúmenes y acontecimientos, dentro de
+un periodo. La búsqueda no distingue mayúsculas de minúsculas.
+
+**Las preguntas en lenguaje natural todavía están pendientes de implementación.**
+
+### Estadísticas
+
+Consulta las entradas por día, los días con actividad, el estado del procesamiento
+y los sentimientos de las entradas analizadas. Son datos sobre lo registrado en el
+diario; no equivalen a un recuento de acontecimientos únicos.
+
+Pulsa **Actualizar datos** para releer los cambios recientes.
+
+## 🗂️ Datos, privacidad y copias
+
+- **Almacenamiento:** SQLite guarda las transcripciones, análisis y estados del proceso.
+- **Procesamiento:** faster-whisper transcribe y Ollama analiza localmente por defecto.
+  Los audios y las respuestas pasan por Telegram.
+- **Audios:** se conservan siete días por defecto; las transcripciones y los análisis permanecen.
+- **Copias:** el bot crea una copia local diaria de SQLite. Las copias caducan a los siete días
+  por defecto y no incluyen los audios.
+- **Mantenimiento:** la limpieza se ejecuta al arrancar el bot y cada hora mientras está activo.
+- **Actualizaciones:** las migraciones de la base crean una copia previa y conservan las entradas.
+
+La base, los audios y las copias contienen información personal y no tienen cifrado
+propio. Guárdalos en una cuenta y disco con acceso controlado. Las copias locales
+no protegen frente a la pérdida del equipo: conserva también una copia fuera de él.
+
+Para restaurar, detén el bot y la web, conserva una copia de la base actual y sustituye
+el archivo configurado en `DATABASE_PATH` por una copia de seguridad. Después vuelve
+a arrancar los servicios. Los audios que hayan caducado no se recuperan.
+
+<details>
+<summary>⚙️ Opciones de configuración</summary>
+
+Todas las opciones están en [`.env.example`](.env.example). Las rutas relativas se
+resuelven desde la carpeta del proyecto.
+
+| Opción | Valor predeterminado |
+| --- | --- |
+| Zona horaria | `Europe/Madrid` |
+| Modelo de transcripción | `base` |
+| Dispositivo de Whisper | `auto` |
+| Conservación de audios y copias | 7 días |
+| Límite por audio | 20 MB / 30 minutos |
+
+Si CUDA no está disponible o falla por incompatibilidad de bibliotecas, utiliza
+`WHISPER_DEVICE=cpu` y `WHISPER_COMPUTE_TYPE=int8`. PyTorch no es necesario para el bot.
+
+Para instalar las dependencias opcionales de los notebooks:
+
+```powershell
+uv sync --group notebooks --group web
+```
+
+</details>
+
+## 🧪 Pruebas y TFM
+
+Ejecuta las pruebas, incluida la interfaz web:
+
+```powershell
+uv run --group web python -m pytest -q
+```
+
+Las pruebas utilizan bases temporales, clientes simulados y credenciales ficticias:
+no envían mensajes reales ni consumen modelos.
+
+El directorio [`evaluation`](evaluation/README.md) contiene el corpus sintético,
+los experimentos con modelos reales y las métricas reproducibles del TFM.
+El corpus inicial sirve como comprobación, no como validación científica final.
