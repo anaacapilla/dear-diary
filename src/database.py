@@ -1,428 +1,348 @@
+"""SQLite storage. Every connection closes and enforces foreign keys."""
 import hashlib
 import json
 import sqlite3
 import uuid
-from collections import Counter
-from datetime import datetime
+from contextlib import contextmanager
+from datetime import date, datetime
 
-from src.config import DATABASE_PATH
+from src.config import DATABASE_PATH, DIARY_TZ
 
 DB_PATH = DATABASE_PATH
+SCHEMA_VERSION = 2
 
 
-def inicializar_db():
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("PRAGMA foreign_keys = ON")
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS diary_entries (
-                id TEXT PRIMARY KEY,
-                hash TEXT UNIQUE NOT NULL,
-                created_at TEXT NOT NULL,
-                received_at TEXT,
-                recorded_at TEXT,
-                audio_path TEXT,
-                transcription TEXT NOT NULL,
-                summary TEXT,
-                sentiment TEXT,
-                events TEXT,
-                transcription_model TEXT,
-                llm_model TEXT,
-                llm_prompt_version TEXT
-            )
-        """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS entities (
-                id TEXT PRIMARY KEY,
-                entity_type TEXT NOT NULL,
-                entity TEXT NOT NULL,
-                UNIQUE(entity_type, entity)
-            )
-        """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS entry_entities (
-                entry_id TEXT NOT NULL,
-                entity_id TEXT NOT NULL,
-                PRIMARY KEY (entry_id, entity_id),
-                FOREIGN KEY (entry_id) REFERENCES diary_entries(id),
-                FOREIGN KEY (entity_id) REFERENCES entities(id)
-            )
-        """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS emotions (
-                id TEXT PRIMARY KEY,
-                emotion TEXT NOT NULL UNIQUE
-            )
-        """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS entry_emotions (
-                entry_id TEXT NOT NULL,
-                emotion_id TEXT NOT NULL,
-                PRIMARY KEY (entry_id, emotion_id),
-                FOREIGN KEY (entry_id) REFERENCES diary_entries(id),
-                FOREIGN KEY (emotion_id) REFERENCES emotions(id)
-            )
-        """)
-
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS daily_reports (
-                report_date TEXT PRIMARY KEY,
-                entries_count INTEGER NOT NULL DEFAULT 0,
-                summary TEXT,
-                sentiment TEXT,
-                emotions TEXT,
-                people TEXT,
-                places TEXT,
-                generated_at TEXT NOT NULL,
-                llm_model TEXT,
-                llm_prompt_version TEXT,
-                source_mode TEXT NOT NULL DEFAULT 'auto'
-            )
-        """)
-
-        conn.commit()
-
-
-def _obtener_sentimiento_global(sentimientos):
-    sentimientos = [s for s in sentimientos if s]
-    if not sentimientos:
-        return "neutral"
-
-    conteo = Counter(sentimientos)
-    valor_mas_comun, frecuencia = conteo.most_common(1)[0]
-
-    if frecuencia == len(sentimientos):
-        return valor_mas_comun
-
-    return "mezclado"
+def ahora():
+    return datetime.now(DIARY_TZ).isoformat()
 
 
 def _obtener_fecha_desde_iso(value):
     if not value:
         return None
-
     try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).date().isoformat()
-    except ValueError:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=DIARY_TZ)
+        return dt.astimezone(DIARY_TZ).date().isoformat()
+    except (ValueError, TypeError):
         return None
 
 
-def _obtener_entradas_del_dia(fecha):
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                id,
-                summary,
-                sentiment,
-                recorded_at,
-                created_at
-            FROM diary_entries
-            WHERE date(COALESCE(recorded_at, created_at)) = ?
-            ORDER BY COALESCE(recorded_at, created_at) ASC
-            """,
-            (fecha,),
-        ).fetchall()
-
-    return [
-        {
-            "id": row[0],
-            "summary": row[1],
-            "sentiment": row[2],
-            "recorded_at": row[3],
-            "created_at": row[4],
-        }
-        for row in rows
-    ]
+@contextmanager
+def conectar():
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.create_function("diary_date", 1, _obtener_fecha_desde_iso)
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
-def _obtener_agregados_del_dia(fecha):
-    with sqlite3.connect(DB_PATH) as conn:
-        emociones = conn.execute(
-            """
-            SELECT e.emotion
-            FROM diary_entries d
-            JOIN entry_emotions ee ON ee.entry_id = d.id
-            JOIN emotions e ON e.id = ee.emotion_id
-            WHERE date(COALESCE(d.recorded_at, d.created_at)) = ?
-            """,
-            (fecha,),
-        ).fetchall()
-
-        entidades = conn.execute(
-            """
-            SELECT en.entity_type, en.entity
-            FROM diary_entries d
-            JOIN entry_entities ee ON ee.entry_id = d.id
-            JOIN entities en ON en.id = ee.entity_id
-            WHERE date(COALESCE(d.recorded_at, d.created_at)) = ?
-            """,
-            (fecha,),
-        ).fetchall()
-
-    emociones = [row[0] for row in emociones]
-    personas = sorted({row[1] for row in entidades if row[0] == "person"})
-    lugares = sorted({row[1] for row in entidades if row[0] == "place"})
-
-    return {
-        "emotions": emociones,
-        "people": personas,
-        "places": lugares,
-    }
+def backup_database(destination):
+    """SQLite's backup API includes committed WAL data, unlike copying the file."""
+    from pathlib import Path
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with conectar() as source:
+        target = sqlite3.connect(destination)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+    return destination
 
 
-def actualizar_reporte_diario(fecha, *, llm_model=None, llm_prompt_version=None):
-    fecha = _obtener_fecha_desde_iso(fecha) or fecha
-    entries = _obtener_entradas_del_dia(fecha)
-    agregados = _obtener_agregados_del_dia(fecha)
-
-    if not entries:
-        summary = "No hay entradas registradas para este día."
-        sentiment = "neutral"
-        entries_count = 0
-        source_mode = "empty"
-    elif len(entries) == 1:
-        summary = entries[0]["summary"] or "Sin resumen disponible."
-        sentiment = entries[0]["sentiment"] or "neutral"
-        entries_count = 1
-        source_mode = "single_entry"
-    else:
-        summaries = [entry["summary"] for entry in entries if entry["summary"]]
-        summary = " ".join(summaries) if summaries else "Sin resumen disponible."
-        sentiment = _obtener_sentimiento_global(
-            [entry["sentiment"] for entry in entries if entry["sentiment"]]
-        )
-        entries_count = len(entries)
-        source_mode = "multi_entry"
-
-    generated_at = datetime.now().astimezone().isoformat()
-    payload = {
-        "report_date": fecha,
-        "entries_count": entries_count,
-        "summary": summary,
-        "sentiment": sentiment,
-        "emotions": json.dumps(agregados["emotions"], ensure_ascii=False),
-        "people": json.dumps(agregados["people"], ensure_ascii=False),
-        "places": json.dumps(agregados["places"], ensure_ascii=False),
-        "generated_at": generated_at,
-        "llm_model": llm_model,
-        "llm_prompt_version": llm_prompt_version,
-        "source_mode": source_mode,
-    }
-
-    with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            """
-            INSERT INTO daily_reports (
-                report_date,
-                entries_count,
-                summary,
-                sentiment,
-                emotions,
-                people,
-                places,
-                generated_at,
-                llm_model,
-                llm_prompt_version,
-                source_mode
+def inicializar_db():
+    from pathlib import Path
+    path = Path(DB_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        with conectar() as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='diary_entries'"
+            ).fetchone()
+        if version > SCHEMA_VERSION:
+            raise RuntimeError("La base de datos pertenece a una versión más reciente")
+        if exists and version < SCHEMA_VERSION:
+            stamp = datetime.now(DIARY_TZ).strftime("%Y%m%d-%H%M%S-%f")
+            backup_database(path.parent / "backups" / f"migration-{stamp}.sqlite3")
+    with conectar() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS diary_entries (
+                id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL,
+                created_at TEXT NOT NULL, received_at TEXT, recorded_at TEXT,
+                audio_path TEXT, transcription TEXT NOT NULL,
+                summary TEXT, sentiment TEXT, events TEXT,
+                transcription_model TEXT, llm_model TEXT, llm_prompt_version TEXT
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(report_date)
-            DO UPDATE SET
-                entries_count = excluded.entries_count,
-                summary = excluded.summary,
-                sentiment = excluded.sentiment,
-                emotions = excluded.emotions,
-                people = excluded.people,
-                places = excluded.places,
-                generated_at = excluded.generated_at,
-                llm_model = excluded.llm_model,
-                llm_prompt_version = excluded.llm_prompt_version,
-                source_mode = excluded.source_mode
-            """,
-            (
-                payload["report_date"],
-                payload["entries_count"],
-                payload["summary"],
-                payload["sentiment"],
-                payload["emotions"],
-                payload["people"],
-                payload["places"],
-                payload["generated_at"],
-                payload["llm_model"],
-                payload["llm_prompt_version"],
-                payload["source_mode"],
-            ),
-        )
-        conn.commit()
-
-    return {
-        "report_date": payload["report_date"],
-        "entries_count": payload["entries_count"],
-        "summary": payload["summary"],
-        "sentiment": payload["sentiment"],
-        "emotions": agregados["emotions"],
-        "people": agregados["people"],
-        "places": agregados["places"],
-        "generated_at": payload["generated_at"],
-        "source_mode": payload["source_mode"],
-    }
+        """)
+        columns = {r["name"] for r in conn.execute("PRAGMA table_info(diary_entries)")}
+        additions = {
+            "telegram_chat_id": "INTEGER", "telegram_message_id": "INTEGER",
+            "telegram_file_id": "TEXT", "content_hash": "TEXT",
+            "status": "TEXT NOT NULL DEFAULT 'completed'",
+            "error_code": "TEXT",
+        }
+        for name, definition in additions.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE diary_entries ADD COLUMN {name} {definition}")
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS telegram_message_unique
+            ON diary_entries(telegram_chat_id, telegram_message_id)
+            WHERE telegram_chat_id IS NOT NULL AND telegram_message_id IS NOT NULL
+        """)
+        conn.execute("""CREATE TABLE IF NOT EXISTS entities (
+            id TEXT PRIMARY KEY, entity_type TEXT NOT NULL, entity TEXT NOT NULL,
+            UNIQUE(entity_type, entity))""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS entry_entities (
+            entry_id TEXT NOT NULL REFERENCES diary_entries(id),
+            entity_id TEXT NOT NULL REFERENCES entities(id),
+            PRIMARY KEY(entry_id, entity_id))""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS emotions (
+            id TEXT PRIMARY KEY, emotion TEXT NOT NULL UNIQUE)""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS entry_emotions (
+            entry_id TEXT NOT NULL REFERENCES diary_entries(id),
+            emotion_id TEXT NOT NULL REFERENCES emotions(id),
+            PRIMARY KEY(entry_id, emotion_id))""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS daily_reports (
+            report_date TEXT PRIMARY KEY, entries_count INTEGER NOT NULL DEFAULT 0,
+            summary TEXT, sentiment TEXT, emotions TEXT, people TEXT, places TEXT,
+            generated_at TEXT NOT NULL, llm_model TEXT, llm_prompt_version TEXT,
+            source_mode TEXT NOT NULL DEFAULT 'auto')""")
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < SCHEMA_VERSION:
+            conn.execute("DELETE FROM daily_reports")
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
 
-def obtener_reporte_diario(fecha):
-    fecha = _obtener_fecha_desde_iso(fecha) or fecha
+def obtener_entrada(entry_id):
+    with conectar() as conn:
+        row = conn.execute("SELECT * FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
+    return dict(row) if row else None
 
-    with sqlite3.connect(DB_PATH) as conn:
+
+def obtener_entrada_telegram(chat_id, message_id):
+    with conectar() as conn:
         row = conn.execute(
-            "SELECT report_date, entries_count, summary, sentiment, emotions, people, places, generated_at, source_mode FROM daily_reports WHERE report_date = ?",
-            (fecha,),
+            "SELECT * FROM diary_entries WHERE telegram_chat_id=? AND telegram_message_id=?",
+            (chat_id, message_id),
         ).fetchone()
-
-    if row is None:
-        report = actualizar_reporte_diario(fecha)
-        return report
-
-    return {
-        "report_date": row[0],
-        "entries_count": row[1],
-        "summary": row[2],
-        "sentiment": row[3],
-        "emotions": json.loads(row[4] or "[]"),
-        "people": json.loads(row[5] or "[]"),
-        "places": json.loads(row[6] or "[]"),
-        "generated_at": row[7],
-        "source_mode": row[8],
-    }
-
-
-def obtener_dias_con_entradas_del_mes(year, month):
-    with sqlite3.connect(DB_PATH) as conn:
-        rows = conn.execute(
-            """
-            SELECT DISTINCT date(COALESCE(recorded_at, created_at))
-            FROM diary_entries
-            WHERE CAST(strftime('%Y', COALESCE(recorded_at, created_at)) AS INTEGER) = ?
-              AND CAST(strftime('%m', COALESCE(recorded_at, created_at)) AS INTEGER) = ?
-            ORDER BY date(COALESCE(recorded_at, created_at)) ASC
-            """,
-            (year, month),
-        ).fetchall()
-
-    return [row[0] for row in rows]
+    return dict(row) if row else None
 
 
 def guardar_entrada(
-    transcription,
-    *,
-    received_at=None,
-    recorded_at=None,
-    audio_path=None,
-    summary=None,
-    sentiment=None,
-    events=None,
-    transcription_model=None,
-    llm_model=None,
-    llm_prompt_version=None,
-    entities=None,
-    emotions=None,
+    transcription, *, received_at=None, recorded_at=None, audio_path=None,
+    summary=None, sentiment=None, events=None, transcription_model=None,
+    llm_model=None, llm_prompt_version=None, entities=None, emotions=None,
+    telegram_chat_id=None, telegram_message_id=None, telegram_file_id=None,
+    status="completed",
 ):
+    if (telegram_chat_id is None) != (telegram_message_id is None):
+        raise ValueError("Se necesitan tanto chat_id como message_id")
     entrada_id = str(uuid.uuid4())
-
-    created_at = datetime.now().astimezone().isoformat()
-
-    hash_entrada = hashlib.sha256(
-        transcription.encode("utf-8")
-    ).hexdigest()
-
-    events_json = json.dumps(events or [], ensure_ascii=False)
-
-    with sqlite3.connect(DB_PATH) as conn:
+    identity = (f"telegram:{telegram_chat_id}:{telegram_message_id}"
+                if telegram_chat_id is not None else f"entry:{entrada_id}")
+    identity_hash = hashlib.sha256(identity.encode()).hexdigest()
+    with conectar() as conn:
+        if telegram_chat_id is not None:
+            existing = conn.execute(
+                "SELECT id FROM diary_entries WHERE telegram_chat_id=? AND telegram_message_id=?",
+                (telegram_chat_id, telegram_message_id),
+            ).fetchone()
+            if existing:
+                return existing["id"]
         conn.execute("""
-            INSERT OR IGNORE INTO diary_entries (
-                id,
-                hash,
-                created_at,
-                received_at,
-                recorded_at,
-                audio_path,
-                transcription,
-                summary,
-                sentiment,
-                events,
-                transcription_model,
-                llm_model,
-                llm_prompt_version
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO diary_entries (
+                id, hash, created_at, received_at, recorded_at, audio_path,
+                transcription, summary, sentiment, events, transcription_model,
+                llm_model, llm_prompt_version, telegram_chat_id, telegram_message_id,
+                telegram_file_id, content_hash, status
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            entrada_id,
-            hash_entrada,
-            created_at,
-            received_at,
-            recorded_at,
-            audio_path,
-            transcription,
-            summary,
-            sentiment,
-            events_json,
-            transcription_model,
-            llm_model,
-            llm_prompt_version,
+            entrada_id, identity_hash, ahora(), received_at, recorded_at, audio_path,
+            transcription, summary, sentiment, json.dumps(events or [], ensure_ascii=False),
+            transcription_model, llm_model, llm_prompt_version, telegram_chat_id,
+            telegram_message_id, telegram_file_id,
+            hashlib.sha256(transcription.encode()).hexdigest(), status,
         ))
-
-        existing_entry = conn.execute(
-            "SELECT id FROM diary_entries WHERE hash = ?",
-            (hash_entrada,),
-        ).fetchone()
-
-        if existing_entry is not None:
-            conn.commit()
-            report_date = _obtener_fecha_desde_iso(recorded_at) or _obtener_fecha_desde_iso(received_at) or datetime.now().astimezone().date().isoformat()
-            actualizar_reporte_diario(report_date)
-            return existing_entry[0]
-
-        for entity_type, entity_value in entities or []:
-            entity_id = str(uuid.uuid4())
-            conn.execute("""
-                INSERT INTO entities (id, entity_type, entity)
-                VALUES (?, ?, ?)
-                ON CONFLICT(entity_type, entity) DO NOTHING
-            """, (entity_id, entity_type, entity_value))
-
-            entity_row = conn.execute("""
-                SELECT id FROM entities
-                WHERE entity_type = ? AND entity = ?
-            """, (entity_type, entity_value)).fetchone()
-
-            conn.execute("""
-                INSERT OR IGNORE INTO entry_entities (entry_id, entity_id)
-                VALUES (?, ?)
-            """, (entrada_id, entity_row[0]))
-
-        for emotion in emotions or []:
-            emotion_id = str(uuid.uuid4())
-            conn.execute("""
-                INSERT INTO emotions (id, emotion)
-                VALUES (?, ?)
-                ON CONFLICT(emotion) DO NOTHING
-            """, (emotion_id, emotion))
-
-            emotion_row = conn.execute("""
-                SELECT id FROM emotions WHERE emotion = ?
-            """, (emotion,)).fetchone()
-
-            conn.execute("""
-                INSERT OR IGNORE INTO entry_emotions (entry_id, emotion_id)
-                VALUES (?, ?)
-            """, (entrada_id, emotion_row[0]))
-
-        conn.commit()
-
-    report_date = _obtener_fecha_desde_iso(recorded_at) or _obtener_fecha_desde_iso(received_at) or datetime.now().astimezone().date().isoformat()
-    actualizar_reporte_diario(report_date)
-
+        _guardar_relaciones(conn, entrada_id, entities or [], emotions or [])
+        conn.execute("DELETE FROM daily_reports")
     return entrada_id
+
+
+def _guardar_relaciones(conn, entry_id, entities, emotions):
+    conn.execute("DELETE FROM entry_entities WHERE entry_id=?", (entry_id,))
+    conn.execute("DELETE FROM entry_emotions WHERE entry_id=?", (entry_id,))
+    for entity_type, value in set(entities):
+        value = value.strip()
+        if not value:
+            continue
+        conn.execute(
+            "INSERT INTO entities VALUES(?,?,?) ON CONFLICT(entity_type,entity) DO NOTHING",
+            (str(uuid.uuid4()), entity_type, value),
+        )
+        entity_id = conn.execute(
+            "SELECT id FROM entities WHERE entity_type=? AND entity=?",
+            (entity_type, value),
+        ).fetchone()["id"]
+        conn.execute("INSERT OR IGNORE INTO entry_entities VALUES(?,?)", (entry_id, entity_id))
+    for emotion in set(emotions):
+        conn.execute("INSERT INTO emotions VALUES(?,?) ON CONFLICT(emotion) DO NOTHING",
+                     (str(uuid.uuid4()), emotion))
+        emotion_id = conn.execute(
+            "SELECT id FROM emotions WHERE emotion=?", (emotion,),
+        ).fetchone()["id"]
+        conn.execute("INSERT OR IGNORE INTO entry_emotions VALUES(?,?)", (entry_id, emotion_id))
+
+
+def guardar_transcripcion(entry_id, text, model):
+    with conectar() as conn:
+        conn.execute("""
+            UPDATE diary_entries SET transcription=?, content_hash=?,
+            transcription_model=?, status=?, error_code=NULL WHERE id=?
+        """, (text, hashlib.sha256(text.encode()).hexdigest(), model,
+              "transcribed" if text else "empty", entry_id))
+        conn.execute("DELETE FROM daily_reports")
+
+
+def completar_entrada(entry_id, analysis, model, prompt_version):
+    with conectar() as conn:
+        conn.execute("""
+            UPDATE diary_entries SET summary=?, sentiment=?, events=?, llm_model=?,
+            llm_prompt_version=?, status='completed', error_code=NULL WHERE id=?
+        """, (analysis.summary, analysis.sentiment,
+              json.dumps(analysis.events, ensure_ascii=False), model, prompt_version, entry_id))
+        _guardar_relaciones(
+            conn, entry_id,
+            [("person", p) for p in analysis.people] + [("place", p) for p in analysis.places],
+            analysis.emotions,
+        )
+        conn.execute("DELETE FROM daily_reports")
+
+
+def marcar_error(entry_id, stage):
+    with conectar() as conn:
+        conn.execute(
+            "UPDATE diary_entries SET status='failed', error_code=? WHERE id=?", (stage, entry_id),
+        )
+        conn.execute("DELETE FROM daily_reports")
+
+
+def entradas_pendientes():
+    with conectar() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM diary_entries WHERE status NOT IN ('completed','empty') ORDER BY created_at"
+        )]
+
+
+def entradas_del_dia(fecha):
+    date.fromisoformat(fecha)
+    with conectar() as conn:
+        return [dict(r) for r in conn.execute("""
+            SELECT * FROM diary_entries
+            WHERE diary_date(COALESCE(recorded_at, received_at, created_at))=?
+            ORDER BY COALESCE(recorded_at, received_at, created_at), id
+        """, (fecha,))]
+
+
+def _obtener_sentimiento_global(sentimientos):
+    values = {s for s in sentimientos if s}
+    return next(iter(values)) if len(values) == 1 else ("mezclado" if values else "neutral")
+
+
+def actualizar_reporte_diario(fecha, *, llm_model=None, llm_prompt_version=None, summarize=None):
+    entries_all = entradas_del_dia(fecha)
+    entries = [e for e in entries_all if e["status"] == "completed"]
+    with conectar() as conn:
+        entities = conn.execute("""
+            SELECT DISTINCT en.entity_type, en.entity FROM entities en
+            JOIN entry_entities ee ON ee.entity_id=en.id
+            JOIN diary_entries d ON d.id=ee.entry_id
+            WHERE diary_date(COALESCE(d.recorded_at,d.received_at,d.created_at))=?
+            AND d.status='completed' ORDER BY en.entity
+        """, (fecha,)).fetchall()
+        emotions = [r[0] for r in conn.execute("""
+            SELECT DISTINCT e.emotion FROM emotions e
+            JOIN entry_emotions ee ON ee.emotion_id=e.id
+            JOIN diary_entries d ON d.id=ee.entry_id
+            WHERE diary_date(COALESCE(d.recorded_at,d.received_at,d.created_at))=?
+            AND d.status='completed' ORDER BY e.emotion
+        """, (fecha,))]
+        cached = conn.execute("SELECT * FROM daily_reports WHERE report_date=?", (fecha,)).fetchone()
+    summaries = [e["summary"] for e in entries if e["summary"]]
+    source_mode = "empty" if not entries else ("single_entry" if len(entries) == 1 else "multi_entry")
+    summary = " ".join(summaries) or ("Sin resumen disponible." if entries else "No hay entradas analizadas.")
+    if len(entries) > 1 and summarize:
+        if cached and cached["source_mode"] == "llm" and cached["llm_model"] == llm_model and cached["llm_prompt_version"] == llm_prompt_version:
+            summary = cached["summary"]
+        else:
+            summary = summarize(summaries)
+        source_mode = "llm"
+    report = {
+        "report_date": fecha, "entries_count": len(entries),
+        "pending_count": sum(e["status"] not in ("completed", "empty") for e in entries_all),
+        "summary": summary, "sentiment": _obtener_sentimiento_global([e["sentiment"] for e in entries]),
+        "emotions": emotions,
+        "people": [r["entity"] for r in entities if r["entity_type"] == "person"],
+        "places": [r["entity"] for r in entities if r["entity_type"] == "place"],
+        "generated_at": ahora(), "source_mode": source_mode,
+    }
+    # Never replace a successful LLM synthesis with a fallback aggregation.
+    if source_mode == "llm" or not cached or cached["source_mode"] != "llm":
+        with conectar() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO daily_reports (
+                    report_date, entries_count, summary, sentiment, emotions, people,
+                    places, generated_at, llm_model, llm_prompt_version, source_mode
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """, (fecha, len(entries), summary, report["sentiment"],
+                  json.dumps(emotions, ensure_ascii=False),
+                  json.dumps(report["people"], ensure_ascii=False),
+                  json.dumps(report["places"], ensure_ascii=False),
+                  report["generated_at"], llm_model, llm_prompt_version, source_mode))
+    return report
+
+
+def obtener_reporte_diario(fecha, **kwargs):
+    return actualizar_reporte_diario(fecha, **kwargs)
+
+
+def obtener_dias_con_entradas_del_mes(year, month):
+    date(year, month, 1)
+    prefix = f"{year:04d}-{month:02d}"
+    with conectar() as conn:
+        return [r[0] for r in conn.execute("""
+            SELECT DISTINCT diary_date(COALESCE(recorded_at,received_at,created_at)) AS day
+            FROM diary_entries WHERE substr(diary_date(COALESCE(recorded_at,received_at,created_at)),1,7)=?
+            ORDER BY day
+        """, (prefix,))]
+
+
+def borrar_entrada(entry_id):
+    with conectar() as conn:
+        row = conn.execute("SELECT audio_path FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
+        if row is None:
+            return None
+        conn.execute("DELETE FROM entry_entities WHERE entry_id=?", (entry_id,))
+        conn.execute("DELETE FROM entry_emotions WHERE entry_id=?", (entry_id,))
+        conn.execute("DELETE FROM diary_entries WHERE id=?", (entry_id,))
+        conn.execute("DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM entry_entities)")
+        conn.execute("DELETE FROM emotions WHERE id NOT IN (SELECT emotion_id FROM entry_emotions)")
+        conn.execute("DELETE FROM daily_reports")
+    return {"audio_path": row["audio_path"]}
+
+
+def limpiar_referencia_audio(path):
+    with conectar() as conn:
+        conn.execute("UPDATE diary_entries SET audio_path=NULL WHERE audio_path=?", (str(path),))
+
+
+def rutas_audio():
+    with conectar() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT audio_path, received_at, created_at FROM diary_entries WHERE audio_path IS NOT NULL"
+        )]

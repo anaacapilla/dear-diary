@@ -31,3 +31,9 @@ __pycache__/
 # Archivos de entorno de IDEs
 .vscode/
 .idea/
+
+# Copias y resultados personales de evaluacion
+backups/
+evaluation/results/
+.pytest_cache/
+evaluation/private/

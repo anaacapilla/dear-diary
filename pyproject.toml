@@ -1,35 +1,22 @@
 [project]
 name = "dear-diary"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Diario de voz privado en Telegram con Whisper, Ollama y SQLite"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "accelerate>=1.10.1",
+    "ctranslate2>=4.5",
     "faster-whisper>=1.2.1",
     "ollama>=0.6.2",
-    "openai-whisper>=20250625",
-    "pandas>=3.0.5",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.2",
     "python-telegram-bot>=22.8",
-    "torch==2.11.0",
-    "torchaudio==2.11.0",
-    "torchvision==0.26.0",
-    "transformers>=4.57.0",
+    "tzdata>=2025.2",
 ]
-
-[[tool.uv.index]]
-url = "https://download.pytorch.org/whl/cu128"
-name = "pytorch"
-explicit = true
-
-[tool.uv.sources]
-torch = { index = "pytorch" }
-torchvision = { index = "pytorch" }
-torchaudio = { index = "pytorch" }
 
 [dependency-groups]
-dev = [
-    "ipykernel>=7.3.0",
-]
+dev = ["pytest>=8.3,<10"]
+notebooks = ["ipykernel>=7.3.0", "pandas>=3.0.5", "transformers>=4.57.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

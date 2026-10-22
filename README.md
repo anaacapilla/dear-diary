@@ -1,216 +1,158 @@
 # dear-diary
 
-**dear-diary** es un diario personal inteligente controlado desde Telegram. El bot recibe notas de voz, las transcribe localmente, analiza su contenido con un LLM y guarda la información estructurada en SQLite.
+Diario de voz personal en Telegram. Recibe un audio en el chat privado autorizado,
+lo transcribe con faster-whisper, extrae resumen, sentimiento, emociones, personas,
+lugares y acontecimientos con Ollama y lo guarda en SQLite.
 
-El flujo principal es:
+## Instalación
 
-```text
-Audio de Telegram -> Whisper -> transcripción -> Ollama -> análisis -> SQLite -> informe por Telegram
-```
+Requisitos: Python 3.12+, uv y Ollama ejecutándose con un modelo disponible.
 
-El informe final incluye la transcripción, el resumen, el sentimiento, las emociones, las personas y los lugares detectados, además del tiempo empleado por la transcripción y el análisis LLM.
-
-## Tecnologías
-
-- **Python:** 3.12 o superior
-- **Gestión del entorno:** [uv](https://docs.astral.sh/uv/)
-- **Interfaz:** `python-telegram-bot`
-- **Transcripción:** Transformers y Whisper, ejecutados localmente
-- **Análisis:** Ollama con salida JSON validada mediante Pydantic
-- **Persistencia:** SQLite
-
-## Configuración
-
-### Requisitos
-
-- Python 3.12+
-- `uv`
-- Ollama instalado y ejecutándose
-- Un modelo disponible en Ollama, por ejemplo `qwen3:1.7b`
-- Un token creado con [BotFather](https://core.telegram.org/bots/tutorial#obtain-your-bot-token)
-
-### Instalación
-
-```bash
-git clone <url-del-repositorio>
-cd dear-diary
-uv sync
-```
-
-Copia `.env.example` como `.env` y configura las variables:
-
-```env
-TELEGRAM_BOT_TOKEN=tu_token_de_telegram
-TELEGRAM_USER_ID=tu_id_de_telegram
-OLLAMA_MODEL=qwen3:1.7b
-WHISPER_MODEL=openai/whisper-base
-LOG_LEVEL=INFO
-DATABASE_PATH=dear_diary.db
-```
-
-`DATABASE_PATH` puede ser una ruta relativa o absoluta. Si se omite, la base se crea como `dear_diary.db` en la raíz del proyecto.
-
-`TELEGRAM_USER_ID` debe contener el identificador numérico de la cuenta de Telegram autorizada. El bot ignora cualquier interacción procedente de otro usuario, sin responder ni procesar el contenido.
-
-## Ejecución
-
-Ejecuta el bot desde la raíz del proyecto:
-
-```bash
+```powershell
+uv sync --locked
+Copy-Item .env.example .env
+ollama pull qwen3:1.7b
 uv run python -m src.bot
 ```
 
-En Telegram:
+Edita el token y el identificador numérico en .env antes de arrancar. No vuelvas a
+copiar el ejemplo sobre una configuración existente. El proyecto requiere un único
+proceso del bot por base de datos y token. No se debe iniciar otra instancia mientras
+la anterior está procesando entradas.
 
-- `/start`: inicia el bot y envía el mensaje de bienvenida.
-- `/help`: muestra los comandos disponibles.
+Los valores predeterminados son Europe/Madrid y siete días de conservación de audios.
+Las rutas relativas de configuración se resuelven desde la raíz del proyecto.
+Usa un directorio dedicado para AUDIO_DIR y otro para BACKUP_DIR.
 
-Cuando el bot se levanta, manda automáticamente un mensaje de bienvenida y queda escuchando para recibir notas de voz o archivos de audio sin necesidad de activar ningún modo manual.
+Whisper utiliza el identificador base, compatible con CTranslate2; el valor antiguo
+openai/whisper-base se traduce automáticamente a base para conservar la compatibilidad
+con .env existentes. El modelo se carga al transcribir el primer audio; puede
+descargar sus pesos si no están en caché. Las pruebas no lo cargan.
 
-Envía una nota de voz o un archivo de audio. El bot descargará el archivo en `audios/`, lo transcribirá, analizará el texto y enviará un informe resumen.
+WHISPER_DEVICE=auto detecta CUDA mediante CTranslate2. Una GPU requiere las bibliotecas
+compatibles con la versión instalada de CTranslate2. Si no están disponibles, configura
+WHISPER_DEVICE=cpu y WHISPER_COMPUTE_TYPE=int8. PyTorch no es necesario para este bot.
+Los paquetes de notebooks están en el grupo opcional notebooks; para usarlos:
+uv sync --group notebooks. Los notebooks antiguos son exploratorios y pueden requerir
+sus propias dependencias adicionales.
 
-## Comportamiento actual del bot
+## Comandos
 
-- El bot manda una bienvenida automática al arrancar.
-- El usuario no tiene que activar ni desactivar la escucha de audio.
-- La recepción de audios está siempre habilitada para la conversación autorizada.
-- El comando `/help` sigue disponible para ver la ayuda básica.
+- /start: bienvenida.
+- /help: ayuda y política de conservación.
+- /report YYYY-MM-DD: reporte de una fecha en la zona del diario.
+- /entries YYYY-MM-DD: identificadores y estados de las entradas del día.
+- /retry: reintenta hasta diez entradas pendientes o fallidas.
+- /retry ID: reintenta una entrada concreta, o vuelve a analizar una entrada terminada.
+- /delete ID: borra una entrada, sus relaciones y su archivo de audio.
+- /backup: guarda una copia adicional de SQLite en el equipo que ejecuta el bot.
 
-## Scripts y módulos
+El bot acepta únicamente al usuario configurado, dentro de su chat privado.
+No responde con información del diario en grupos. Los archivos enviados como documentos
+genéricos no se admiten; se admiten notas de voz y mensajes de tipo audio de Telegram.
 
-| Archivo | Responsabilidad |
-| --- | --- |
-| [`src/bot.py`](src/bot.py) | Configura Telegram, gestiona comandos y audios, manda la bienvenida inicial, coordina transcripción, análisis, persistencia e informe final. |
-| [`src/config.py`](src/config.py) | Carga `.env` y centraliza modelos, nivel de logs, directorio de audios y ruta de SQLite. |
-| [`src/transcriber.py`](src/transcriber.py) | Carga Whisper y convierte un archivo de audio en texto en español. |
-| [`src/llm/extractor.py`](src/llm/extractor.py) | Llama a Ollama y valida la respuesta con `DiaryAnalysis`. |
-| [`src/llm/models.py`](src/llm/models.py) | Define el esquema de salida del análisis: resumen, sentimiento, emociones, personas, lugares y eventos. |
-| [`src/llm/prompts.py`](src/llm/prompts.py) | Contiene el prompt del sistema, el prompt de análisis y la versión del prompt. |
-| [`src/database.py`](src/database.py) | Crea las tablas SQLite y guarda entradas, entidades, emociones y relaciones. |
-| [`dev.ipynb`](dev.ipynb) | Notebook de desarrollo y pruebas exploratorias. |
-| [`test.ipynb`](test.ipynb) | Notebook de pruebas manuales. |
+## Procesamiento y recuperación
 
-## Estructura de la base de datos
+Cada mensaje se identifica por chat_id + message_id. Volver a recibir el mismo mensaje
+no duplica una entrada, pero dos mensajes con las mismas palabras sí crean dos entradas.
+Sin identidad de Telegram, cada llamada de guardado crea una entrada independiente.
 
-La base de datos utiliza cinco tablas. `diary_entries` es la tabla principal; las otras tablas normalizan entidades y emociones para que puedan reutilizarse entre varias entradas.
+1. Guarda una entrada pending con el identificador del archivo de Telegram.
+2. Descarga el audio con un nombre UUID y renombrado atómico desde un archivo .part.
+3. Transcribe y guarda el texto antes de llamar al LLM: estado transcribed.
+4. Valida el JSON y guarda el análisis y todas sus relaciones en una transacción: completed.
+5. Si no hay voz, marca empty. Si falla una etapa, marca failed y conserva lo ya guardado.
 
-```mermaid
-erDiagram
-	diary_entries ||--o{ entry_entities : contiene
-	entities ||--o{ entry_entities : aparece_en
-	diary_entries ||--o{ entry_emotions : expresa
-	emotions ||--o{ entry_emotions : pertenece_a
+Un fallo de Ollama no borra la transcripción. /retry reutiliza el texto existente.
+Si todavía no hay transcripción y ya caducó el audio, intenta descargarlo otra vez de
+Telegram; la recuperación depende de que Telegram siga ofreciendo ese archivo.
+Al arrancar avisa de las entradas pendientes; no las reprocesa todas sin control.
+No se descartan las actualizaciones que Telegram tenga pendientes al reiniciar.
+Telegram no es una cola duradera ilimitada: conserva actualizaciones durante un periodo
+limitado, por lo que conviene mantener el bot ejecutándose.
 
-	diary_entries {
-		TEXT id PK
-		TEXT hash UK
-		TEXT created_at
-		TEXT received_at
-		TEXT recorded_at
-		TEXT audio_path
-		TEXT transcription
-		TEXT summary
-		TEXT sentiment
-		TEXT events
-		TEXT transcription_model
-		TEXT llm_model
-		TEXT llm_prompt_version
-	}
+Se limitan tamaño y duración declarados del audio a 20 MB y 30 minutos por defecto.
+Una transcripción larga se analiza por bloques; los resúmenes se sintetizan de forma
+jerárquica sin recortar silenciosamente la entrada. Cada petición a Ollama tiene un
+timeout de 120 segundos y hasta dos intentos. La salida se valida con Pydantic.
+Las instrucciones incluidas en un diario se tratan como datos en el prompt, aunque
+esta separación y el esquema JSON no garantizan por sí solos la fidelidad semántica.
 
-	entities {
-		TEXT id PK
-		TEXT entity_type
-		TEXT entity UK
-	}
+Las respuestas largas se dividen en mensajes de hasta 3500 unidades UTF-16, incluyendo
+listas largas y caracteres emoji. El resumen del informe individual se abrevia en
+Telegram, mientras que SQLite conserva el resumen completo.
 
-	entry_entities {
-		TEXT entry_id PK, FK
-		TEXT entity_id PK, FK
-	}
+## Reportes y fechas
 
-	emotions {
-		TEXT id PK
-		TEXT emotion UK
-	}
+Las fechas se convierten a Europe/Madrid antes de determinar el día, incluyendo los
+cambios de horario de verano. Fechas antiguas sin zona horaria se interpretan en esa
+zona. Si cambias DIARY_TIMEZONE, la agrupación se calcula de nuevo con la nueva zona.
 
-	entry_emotions {
-		TEXT entry_id PK, FK
-		TEXT emotion_id PK, FK
-	}
+El reporte cuenta entradas completed y muestra el número de pendientes/fallidas.
+Una entrada usa su propio resumen. Varias entradas producen una síntesis LLM conjunta,
+que se guarda en daily_reports. El sentimiento global es el sentimiento común si
+todas coinciden, o mezclado si difieren. Personas, lugares y emociones se unen sin
+duplicados exactos. Si falla la síntesis, se muestran los resúmenes guardados y se
+informa de ello. No se presenta esa concatenación como una síntesis LLM.
+Una nueva entrada, una actualización o un borrado invalidan los reportes guardados.
+
+## Persistencia y migraciones
+
+SQLite contiene seis tablas: diary_entries, entities, entry_entities, emotions,
+entry_emotions y daily_reports. La primera guarda el contenido y los estados de proceso;
+las siguientes normalizan entidades y emociones; la última guarda reportes derivados.
+
+La migración de esquema se hace al arrancar, con PRAGMA user_version. Antes de modificar
+una base antigua, crea una copia migration-*.sqlite3 junto a la base, en backups/.
+Conserva los identificadores, transcripciones y análisis existentes. Activa claves
+foráneas en todas las conexiones, aplica transacciones y cierra las conexiones.
+
+El antiguo campo hash pasa a identificar la entrada o mensaje para entradas nuevas;
+content_hash guarda la huella del texto sin imponer unicidad. Las filas antiguas
+conservan su hash. Un índice único evita duplicados por mensaje de Telegram.
+
+Las personas, lugares y emociones que la versión anterior nunca llegó a guardar no
+se pueden reconstruir con una migración de estructura. Usa /entries y /retry ID para
+volver a analizar la transcripción de una entrada antigua. Tampoco se pueden recuperar
+entradas que el antiguo hash descartó ni audios que ya fueron sobrescritos.
+
+## Conservación y copias
+
+- Los audios caducan a los siete días desde su recepción.
+- La limpieza se ejecuta al arrancar y cada hora mientras el bot está en marcha:
+  el borrado se produce en la siguiente ejecución tras caducar. Si está apagado,
+  se aplica al siguiente arranque.
+- La limpieza incluye audios antiguos ya existentes y archivos huérfanos del directorio
+  dedicado. Conserva las transcripciones y los análisis, y elimina la referencia al audio.
+- SQLite tiene una copia automática diaria y copias manuales con /backup.
+  Se utiliza la API de backup de SQLite, no una copia insegura de un archivo abierto.
+- Copias automáticas, manuales y de migración caducan a los siete días; el control de
+  caducidad se ejecuta con el mantenimiento.
+- Borrar una entrada no reescribe copias anteriores. Estas pueden contenerla hasta
+  que caduquen. Las copias son locales y no incluyen los archivos de audio.
+
+El contenido se procesa localmente con Whisper y, por defecto, con Ollama local.
+El audio y las respuestas pasan por Telegram. No se escriben transcripciones,
+resúmenes ni cuerpos de excepciones en los logs de la aplicación.
+SQLite, audios y backups contienen información personal sin cifrado propio:
+deben quedar en una cuenta y disco con acceso controlado. .gitignore los excluye,
+pero no elimina archivos que ya estuvieran versionados.
+
+Para restaurar: detén el bot, conserva una copia del archivo actual y copia un backup
+sobre DATABASE_PATH; después arranca una única instancia. La restauración recupera
+SQLite, no los audios que hayan caducado. No sustituyas el archivo mientras esté abierto.
+
+## Pruebas y evaluación del TFM
+
+```powershell
+uv run python -m pytest -q
 ```
 
-### Tablas
+Las pruebas usan SQLite temporal, clientes simulados y credenciales ficticias.
+Cubren guardado de relaciones, deduplicación, medianoche y cambios de horario,
+migración y restauración, reintentos, límites de Telegram, privacidad, retención,
+síntesis y evaluación. No envían mensajes reales ni consumen modelos.
 
-#### `diary_entries`
-
-Guarda una entrada completa del diario:
-
-- Identificación: `id` y `hash`.
-- Fechas: `created_at`, `received_at` y `recorded_at`.
-- Origen y contenido: `audio_path` y `transcription`.
-- Análisis: `summary`, `sentiment` y `events`.
-- Trazabilidad: `transcription_model`, `llm_model` y `llm_prompt_version`.
-
-`events` se almacena como un array JSON serializado en SQLite.
-
-#### `entities`
-
-Catálogo reutilizable de entidades mencionadas en las transcripciones. Cada fila tiene un identificador, un tipo y un valor:
-
-```text
-id                  entity_type    entity
-entity-id-1         person         Ana
-entity-id-2         place          Valencia
-```
-
-Actualmente el bot registra los tipos `person` y `place`.
-
-#### `entry_entities`
-
-Tabla intermedia que relaciona cada entrada con las entidades que aparecen en ella. Su clave primaria compuesta evita duplicar una relación.
-
-#### `emotions`
-
-Catálogo reutilizable de emociones detectadas por el LLM.
-
-#### `entry_emotions`
-
-Tabla intermedia que relaciona cada entrada con sus emociones. Una misma emoción puede aparecer en muchas entradas.
-
-## Salida del LLM
-
-El análisis se valida con el modelo `DiaryAnalysis` y contiene:
-
-- `summary`: resumen breve.
-- `sentiment`: `positivo`, `negativo`, `neutral` o `mezclado`.
-- `emotions`: lista de emociones detectadas.
-- `people`: lista de personas mencionadas.
-- `places`: lista de lugares mencionados.
-- `events`: lista de acontecimientos o actividades relevantes.
-
-La respuesta del LLM se limita mediante un esquema JSON y el prompt indica que no debe inventar información.
-
-## Estructura del proyecto
-
-```text
-.
-├── audios/
-├── src/
-│   ├── __init__.py
-│   ├── bot.py
-│   ├── config.py
-│   ├── database.py
-│   ├── transcriber.py
-│   └── llm/
-│       ├── __init__.py
-│       ├── extractor.py
-│       ├── models.py
-│       └── prompts.py
-├── dev.ipynb
-├── test.ipynb
-├── pyproject.toml
-├── uv.lock
-└── README.md
-```
-
-Los secretos deben mantenerse únicamente en `.env`, que no debe subirse al repositorio.
+El directorio evaluation contiene un corpus textual sintético inicial, un ejecutor
+con modelos reales y métricas reproducibles. Consulta evaluation/README.md.
+El corpus inicial sirve como comprobación, no como validación científica del TFM.
