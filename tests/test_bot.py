@@ -24,10 +24,10 @@ def test_authorization_is_private_only():
     assert not bot.usuario_autorizado(update(user_id=999))
 
 
-def test_help_does_not_depend_on_real_user_id():
+def test_start_gives_minimal_instruction():
     u = update()
-    asyncio.run(bot.help_command(u, None))
-    assert "/report YYYY-MM-DD" in u.message.reply_text.await_args.args[0]
+    asyncio.run(bot.start(u, None))
+    assert u.message.reply_text.await_args.args[0] == bot.MENSAJE_BIENVENIDA
 
 
 def test_long_emoji_messages_split_without_loss():
@@ -37,14 +37,13 @@ def test_long_emoji_messages_split_without_loss():
     assert all(len(c.encode("utf-16-le")) // 2 <= 3500 for c in chunks)
 
 
-def test_report_includes_long_lists_and_is_sent_in_safe_chunks(analysis):
-    analysis.people = ["Persona" * 100] * 20
-    text = bot.formatear_informe("", analysis, 1, 2)
-    message = NS(reply_text=AsyncMock())
-    asyncio.run(bot.enviar_texto(message, text))
-    assert message.reply_text.await_count > 1
-    assert all(len(c.args[0].encode("utf-16-le")) // 2 <= 3500
-               for c in message.reply_text.await_args_list)
+def test_result_is_brief_and_full_details_are_available(analysis):
+    from src.entry_ui import brief_card
+    entry = {"id": "test", "status": "completed", "summary": "A " * 1000,
+             "emotions": ["alegria"], "people": ["Persona" * 100] * 20, "places": [], "events": "[]"}
+    text = brief_card(entry)
+    assert len(text) < 700
+    assert "ID:" not in text and "Transcripción:" not in text
 
 
 def test_failed_notification_does_not_lose_processing(db, tmp_path, monkeypatch, analysis):
@@ -94,11 +93,3 @@ def test_same_filename_uses_distinct_paths(db, tmp_path, monkeypatch):
     paths = [entry["audio_path"] for entry in db.entradas_pendientes()]
     assert len(paths) == 2 and len(set(paths)) == 2
     assert all("audio.mp3" not in path for path in paths)
-
-
-def test_strict_date_argument():
-    import pytest
-    for args in [[], ["20260830"], ["2026-08-30T12:00:00"], ["2026-02-30"], ["2026-08-30", "extra"]]:
-        with pytest.raises(ValueError):
-            bot.fecha_argumento(args)
-    assert bot.fecha_argumento(["2026-08-30"]) == "2026-08-30"

@@ -36,16 +36,27 @@ Los paquetes de notebooks están en el grupo opcional notebooks; para usarlos:
 uv sync --group notebooks. Los notebooks antiguos son exploratorios y pueden requerir
 sus propias dependencias adicionales.
 
-## Comandos
+## Uso de Telegram
 
-- /start: bienvenida.
-- /help: ayuda y política de conservación.
-- /report YYYY-MM-DD: reporte de una fecha en la zona del diario.
-- /entries YYYY-MM-DD: identificadores y estados de las entradas del día.
-- /retry: añade a la cola hasta diez entradas pendientes o fallidas.
-- /retry ID: añade una entrada concreta a la cola, o vuelve a analizar una terminada.
-- /delete ID: borra una entrada, sus relaciones y su archivo de audio.
-- /backup: guarda una copia adicional de SQLite en el equipo que ejecuta el bot.
+Envía una nota de voz o un audio en tu chat privado. El bot confirma la recepción,
+indica cuántas entradas hay delante y actualiza un único mensaje mientras descarga,
+transcribe y analiza. Al terminar muestra «Entrada guardada» y un resumen breve.
+Si falla, conserva lo procesado y ofrece únicamente el botón Reintentar.
+Si no detecta voz, te pide enviar otro audio.
+
+El menú de comandos queda vacío. /start se conserva como respuesta mínima al botón
+Iniciar de Telegram: «Envíame un audio para añadir una entrada a tu diario».
+Los mensajes de texto y los comandos antiguos reciben esa misma orientación;
+no consultan, modifican ni borran entradas. La consulta y la edición se hacen en la web.
+Los botones antiguos se retiran al pulsarlos o cuando se actualiza su tarjeta.
+
+Al arrancar envía «Bot en marcha. Puedes enviarme audios». Si hay entradas
+interrumpidas, añade el aviso de recuperación al mismo mensaje. Al detenerlo de
+forma controlada (por ejemplo, con Ctrl+C), termina la entrada activa y envía
+«Bot detenido. No procesaré audios hasta que vuelva a arrancar» antes de cerrar
+la conexión con Telegram. Un cierre forzado, un corte eléctrico o la falta de
+conexión pueden impedir ese aviso. Se mantienen las copias y la limpieza
+automáticas, sin comandos de administración en Telegram.
 
 El bot acepta únicamente al usuario configurado, dentro de su chat privado.
 No responde con información del diario en grupos. Los archivos enviados como documentos
@@ -64,13 +75,16 @@ Sin identidad de Telegram, cada llamada de guardado crea una entrada independien
 4. Valida el JSON y guarda el análisis y todas sus relaciones en una transacción: completed.
 5. Si no hay voz, marca empty. Si falla una etapa, marca failed y conserva lo ya guardado.
 
-Un fallo de Ollama no borra la transcripción. /retry reutiliza el texto existente.
+Un fallo de Ollama no borra la transcripción. Reintentar reutiliza el texto existente.
 Si todavía no hay transcripción y ya caducó el audio, intenta descargarlo otra vez de
 Telegram; la recuperación depende de que Telegram siga ofreciendo ese archivo.
 Al arrancar recupera automáticamente las entradas interrumpidas en estado pending
 o transcribed que tienen un mensaje de Telegram del usuario autorizado.
-Las entradas failed y las antiguas sin destino de Telegram requieren /retry.
+Las entradas failed se reintentan desde el botón de su tarjeta. Las entradas antiguas
+sin destino de Telegram requieren gestión local; no se reintentan automáticamente.
 No se descartan las actualizaciones que Telegram tenga pendientes al reiniciar.
+El arranque solicita expresamente `message` y `callback_query` para recibir tanto
+audios como pulsaciones, aunque Telegram conserve un filtro de una ejecución anterior.
 Telegram no es una cola duradera ilimitada: conserva actualizaciones durante un periodo
 limitado, por lo que conviene mantener el bot ejecutándose.
 
@@ -81,61 +95,33 @@ timeout de 120 segundos y hasta dos intentos. La salida se valida con Pydantic.
 Las instrucciones incluidas en un diario se tratan como datos en el prompt, aunque
 esta separación y el esquema JSON no garantizan por sí solos la fidelidad semántica.
 
-Las respuestas largas se dividen en mensajes de hasta 3500 unidades UTF-16, incluyendo
-listas largas y caracteres emoji. El resumen del informe individual se abrevia en
-Telegram, mientras que SQLite conserva el resumen completo.
+Cada entrada conserva en SQLite el identificador de su mensaje editable, la
+transcripción original, las correcciones y las métricas. Se mantiene la migración
+compatible con las bases anteriores, con copia previa y sin borrar entradas.
 
-## Mejora de experiencia 1: recepción y cola
+## Prueba manual: interfaz simplificada
 
-Esta entrega incorpora únicamente la recepción con cola. La edición de mensajes de
-progreso, los botones y las demás mejoras de experiencia quedan para entregas posteriores.
-
-- La recepción registra primero la entrada en SQLite y confirma antes de descargar
-  el audio o cargar Whisper: «Audio recibido. Lo procesaré a continuación».
-- Si hay más audios, indica cuántas entradas tiene delante, incluyendo la activa.
-  Es una instantánea al confirmar; el mensaje no se actualiza mientras avanza la cola.
-- Un único trabajador procesa las entradas en orden FIFO durante la sesión.
-  No se ejecutan varias transcripciones o análisis de entradas en paralelo.
-- Puedes enviar más audios y usar /help o /entries mientras trabaja. Las operaciones
-  largas de /report, /backup y /delete se atienden en segundo plano y esperan su turno
-  para acceder a los recursos compartidos; no bloquean la recepción de nuevos audios.
-- /retry utiliza la misma cola. Una entrada que ya está esperando o procesándose no
-  se añade otra vez. Una entrada fallida se marca pending al solicitar el reintento,
-  conservando su transcripción.
-- Los mensajes de procesamiento y el resultado responden al audio original, también
-  cuando se retoma tras reiniciar. Si el audio se ha eliminado del chat, el bot intenta
-  entregar igualmente la respuesta.
-- Un fallo de análisis no detiene las entradas siguientes. Si Telegram no entrega la
-  confirmación, la entrada permanece registrada y su procesamiento continúa.
-- La cola de ejecución está en memoria y los datos y estados están en SQLite.
-  Al reiniciar se recuperan pending y transcribed por orden de registro.
-  Los fallos no se reintentan automáticamente para evitar bucles de errores.
-- Al detener con Ctrl+C se deja terminar la entrada activa antes de cerrar la conexión
-  con Telegram. Las entradas aún sin empezar quedan pendientes para el siguiente
-  arranque. El cierre puede tardar si el audio activo todavía se está procesando.
-- Los reportes y otras solicitudes de comandos no son trabajos persistentes:
-  si una interrupción impide responderlos, vuelve a ejecutar el comando.
-
-No requiere cambios de esquema ni dependencias nuevas.
-
-### Prueba manual de esta entrega
-
-1. Arranca una única instancia con `uv run python -m src.bot`.
-2. Envía tres notas de voz seguidas, sin esperar al primer resultado.
-3. Comprueba que cada una recibe confirmación antes de su procesamiento y que la
-   segunda y la tercera indican las entradas que tienen delante cuando corresponde.
-4. Mientras se analiza la primera, envía /help y consulta /entries con la fecha de hoy.
-   Deben responder sin esperar a que terminen todos los audios.
-5. Comprueba que los resultados llegan por orden y responden a su audio correspondiente.
-6. Ejecuta /retry ID sobre una entrada en cola: debe indicar que ya está esperando
-   o procesándose, sin duplicar el trabajo.
-7. Para comprobar la recuperación, envía varios audios y pulsa Ctrl+C mientras se
-   procesa el primero. Espera al cierre y vuelve a arrancar: los que no habían
-   empezado deben retomarse automáticamente.
-8. Opcionalmente, detén Ollama para provocar un fallo: el bot debe conservar la
-   transcripción y seguir atendiendo entradas. Vuelve a iniciarlo y usa /retry ID.
+1. Detén la instancia anterior y arranca con `uv run python -m src.bot`.
+2. Comprueba que desaparece el menú de comandos y llega un único aviso «Bot en marcha».
+3. Pulsa Iniciar o envía /start: debe responder solo con la instrucción para enviar audio.
+4. Envía dos audios seguidos: el segundo debe indicar su posición en la cola.
+   Cada tarjeta se actualiza y termina con un resumen breve, sin botones de gestión.
+5. Envía un audio sin voz: debe pedir otro audio, sin botones de corrección.
+6. Provoca un fallo de Ollama y espera la tarjeta de error. Restablece el servicio
+   y pulsa Reintentar: debe reutilizar el texto y actualizar la misma tarjeta.
+   Pulsar varias veces no debe duplicar el trabajo.
+7. Pulsa un botón de gestión de una tarjeta antigua: debe orientar hacia la web
+   y mostrar la tarjeta simplificada sin ejecutar la acción antigua.
+8. Reinicia con entradas en cola: debe avisar de la recuperación y retomarlas.
+9. Guarda una corrección desde la web con el bot encendido: debe regenerarse
+   el análisis en la misma tarjeta de Telegram, sin añadir botones de gestión.
+10. Detén el bot con Ctrl+C: debe terminar la entrada activa, si la hay, y enviar
+    un único aviso «Bot detenido».
 
 ## Reportes y fechas
+
+La lógica de reportes se conserva en la capa de datos; ya no se expone como comando
+de Telegram.
 
 Las fechas se convierten a Europe/Madrid antes de determinar el día, incluyendo los
 cambios de horario de verano. Fechas antiguas sin zona horaria se interpretan en esa
@@ -151,9 +137,9 @@ Una nueva entrada, una actualización o un borrado invalidan los reportes guarda
 
 ## Persistencia y migraciones
 
-SQLite contiene seis tablas: diary_entries, entities, entry_entities, emotions,
-entry_emotions y daily_reports. La primera guarda el contenido y los estados de proceso;
-las siguientes normalizan entidades y emociones; la última guarda reportes derivados.
+SQLite contiene siete tablas: diary_entries, entities, entry_entities, emotions,
+entry_emotions, daily_reports y entry_edit_requests. Guardan las entradas y sus estados,
+entidades y emociones normalizadas, reportes derivados y la petición de corrección activa.
 
 La migración de esquema se hace al arrancar, con PRAGMA user_version. Antes de modificar
 una base antigua, crea una copia migration-*.sqlite3 junto a la base, en backups/.
@@ -165,8 +151,8 @@ content_hash guarda la huella del texto sin imponer unicidad. Las filas antiguas
 conservan su hash. Un índice único evita duplicados por mensaje de Telegram.
 
 Las personas, lugares y emociones que la versión anterior nunca llegó a guardar no
-se pueden reconstruir con una migración de estructura. Usa /entries y /retry ID para
-volver a analizar la transcripción de una entrada antigua. Tampoco se pueden recuperar
+se pueden reconstruir con una migración de estructura. La transcripción puede
+corregirse desde la web para generar un nuevo análisis. Tampoco se pueden recuperar
 entradas que el antiguo hash descartó ni audios que ya fueron sobrescritos.
 
 ## Conservación y copias
@@ -177,7 +163,7 @@ entradas que el antiguo hash descartó ni audios que ya fueron sobrescritos.
   se aplica al siguiente arranque.
 - La limpieza incluye audios antiguos ya existentes y archivos huérfanos del directorio
   dedicado. Conserva las transcripciones y los análisis, y elimina la referencia al audio.
-- SQLite tiene una copia automática diaria y copias manuales con /backup.
+- SQLite tiene una copia automática diaria durante el mantenimiento.
   Se utiliza la API de backup de SQLite, no una copia insegura de un archivo abierto.
 - Copias automáticas, manuales y de migración caducan a los siete días; el control de
   caducidad se ejecuta con el mantenimiento.
@@ -205,7 +191,8 @@ Las pruebas usan SQLite temporal, clientes simulados y credenciales ficticias.
 Cubren guardado de relaciones, deduplicación, medianoche y cambios de horario,
 migración y restauración, reintentos, límites de Telegram, privacidad, retención,
 síntesis, cola FIFO, recepción durante el procesamiento, recuperación al reiniciar,
-apagado y evaluación. No envían mensajes reales ni consumen modelos.
+apagado, mensaje único, menú vacío, avisos de inicio y apagado, autorización y reintento
+desde botones, corrección desde la web y evaluación. No envían mensajes reales ni consumen modelos.
 
 El directorio evaluation contiene un corpus textual sintético inicial, un ejecutor
 con modelos reales y métricas reproducibles. Consulta evaluation/README.md.

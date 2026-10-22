@@ -9,7 +9,7 @@ from datetime import date, datetime
 from src.config import DATABASE_PATH, DIARY_TZ
 
 DB_PATH = DATABASE_PATH
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def ahora():
@@ -86,6 +86,11 @@ def inicializar_db():
             "telegram_file_id": "TEXT", "content_hash": "TEXT",
             "status": "TEXT NOT NULL DEFAULT 'completed'",
             "error_code": "TEXT",
+            "telegram_progress_message_id": "INTEGER",
+            "original_transcription": "TEXT",
+            "transcription_edited_at": "TEXT",
+            "transcription_seconds": "REAL",
+            "analysis_seconds": "REAL",
         }
         for name, definition in additions.items():
             if name not in columns:
@@ -113,8 +118,15 @@ def inicializar_db():
             summary TEXT, sentiment TEXT, emotions TEXT, people TEXT, places TEXT,
             generated_at TEXT NOT NULL, llm_model TEXT, llm_prompt_version TEXT,
             source_mode TEXT NOT NULL DEFAULT 'auto')""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS entry_edit_requests (
+            entry_id TEXT PRIMARY KEY REFERENCES diary_entries(id) ON DELETE CASCADE,
+            prompt_message_id INTEGER NOT NULL UNIQUE, expected_hash TEXT NOT NULL,
+            requested_at REAL NOT NULL, progress_message_id INTEGER NOT NULL
+        )""")
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < SCHEMA_VERSION:
+            conn.execute("""UPDATE diary_entries SET original_transcription=transcription
+                            WHERE original_transcription IS NULL AND transcription<>''""")
             conn.execute("DELETE FROM daily_reports")
             conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -199,23 +211,26 @@ def _guardar_relaciones(conn, entry_id, entities, emotions):
         conn.execute("INSERT OR IGNORE INTO entry_emotions VALUES(?,?)", (entry_id, emotion_id))
 
 
-def guardar_transcripcion(entry_id, text, model):
+def guardar_transcripcion(entry_id, text, model, *, seconds=None):
     with conectar() as conn:
         conn.execute("""
             UPDATE diary_entries SET transcription=?, content_hash=?,
-            transcription_model=?, status=?, error_code=NULL WHERE id=?
+            transcription_model=?, status=?, error_code=NULL,
+            original_transcription=COALESCE(original_transcription, ?),
+            transcription_seconds=COALESCE(?, transcription_seconds) WHERE id=?
         """, (text, hashlib.sha256(text.encode()).hexdigest(), model,
-              "transcribed" if text else "empty", entry_id))
+              "transcribed" if text else "empty", text, seconds, entry_id))
         conn.execute("DELETE FROM daily_reports")
 
 
-def completar_entrada(entry_id, analysis, model, prompt_version):
+def completar_entrada(entry_id, analysis, model, prompt_version, *, seconds=None):
     with conectar() as conn:
         conn.execute("""
             UPDATE diary_entries SET summary=?, sentiment=?, events=?, llm_model=?,
-            llm_prompt_version=?, status='completed', error_code=NULL WHERE id=?
+            llm_prompt_version=?, status='completed', error_code=NULL,
+            analysis_seconds=COALESCE(?, analysis_seconds) WHERE id=?
         """, (analysis.summary, analysis.sentiment,
-              json.dumps(analysis.events, ensure_ascii=False), model, prompt_version, entry_id))
+              json.dumps(analysis.events, ensure_ascii=False), model, prompt_version, seconds, entry_id))
         _guardar_relaciones(
             conn, entry_id,
             [("person", p) for p in analysis.people] + [("place", p) for p in analysis.places],
@@ -355,3 +370,78 @@ def rutas_audio():
         return [dict(r) for r in conn.execute(
             "SELECT audio_path, received_at, created_at FROM diary_entries WHERE audio_path IS NOT NULL"
         )]
+
+
+def guardar_mensaje_progreso(entry_id, message_id):
+    with conectar() as conn:
+        conn.execute(
+            "UPDATE diary_entries SET telegram_progress_message_id=? WHERE id=?",
+            (message_id, entry_id),
+        )
+
+
+def obtener_detalles(entry_id):
+    with conectar() as conn:
+        row = conn.execute("SELECT * FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
+        if row is None:
+            return None
+        entry = dict(row)
+        entities = conn.execute(
+            """SELECT en.entity_type, en.entity FROM entities en
+               JOIN entry_entities ee ON ee.entity_id=en.id
+               WHERE ee.entry_id=? ORDER BY en.entity""", (entry_id,),
+        ).fetchall()
+        entry["people"] = [r["entity"] for r in entities if r["entity_type"] == "person"]
+        entry["places"] = [r["entity"] for r in entities if r["entity_type"] == "place"]
+        entry["emotions"] = [r[0] for r in conn.execute(
+            """SELECT e.emotion FROM emotions e JOIN entry_emotions ee ON ee.emotion_id=e.id
+               WHERE ee.entry_id=? ORDER BY e.emotion""", (entry_id,),
+        )]
+    return entry
+
+
+def corregir_transcripcion(entry_id, text, expected_hash):
+    text = text.strip()
+    if not text or len(text) > 12000:
+        raise ValueError("La transcripción debe contener entre 1 y 12000 caracteres")
+    with conectar() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
+        if row is None:
+            raise ValueError("La entrada ya no existe")
+        current_hash = hashlib.sha256(row["transcription"].encode()).hexdigest()
+        if current_hash != expected_hash or row["status"] not in ("completed", "failed", "empty"):
+            raise ValueError("La entrada ha cambiado")
+        conn.execute("""
+            UPDATE diary_entries SET original_transcription=COALESCE(original_transcription, transcription),
+            transcription=?, content_hash=?, transcription_edited_at=?, status='pending', error_code=NULL,
+            summary=NULL, sentiment=NULL, events='[]', llm_model=NULL, llm_prompt_version=NULL,
+            analysis_seconds=NULL WHERE id=?
+        """, (text, hashlib.sha256(text.encode()).hexdigest(), ahora(), entry_id))
+        _guardar_relaciones(conn, entry_id, [], [])
+        conn.execute("DELETE FROM entry_edit_requests WHERE entry_id=?", (entry_id,))
+        conn.execute("DELETE FROM daily_reports")
+
+
+def obtener_solicitud_edicion(prompt_id=None):
+    with conectar() as conn:
+        if prompt_id is None:
+            row = conn.execute("SELECT * FROM entry_edit_requests ORDER BY requested_at DESC LIMIT 1").fetchone()
+        else:
+            row = conn.execute("SELECT * FROM entry_edit_requests WHERE prompt_message_id=?", (prompt_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def guardar_solicitud_edicion(entry_id, prompt_id, expected_hash, requested_at, progress_id):
+    with conectar() as conn:
+        conn.execute("DELETE FROM entry_edit_requests")
+        conn.execute("INSERT INTO entry_edit_requests VALUES(?,?,?,?,?)",
+                     (entry_id, prompt_id, expected_hash, requested_at, progress_id))
+
+
+def cancelar_edicion(entry_id=None):
+    with conectar() as conn:
+        if entry_id is None:
+            conn.execute("DELETE FROM entry_edit_requests")
+        else:
+            conn.execute("DELETE FROM entry_edit_requests WHERE entry_id=?", (entry_id,))

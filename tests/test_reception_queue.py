@@ -22,13 +22,14 @@ def make_update(message_id=1):
         message=NS(
             voice=NS(file_id=f"FILE-{message_id}", file_size=20, duration=2),
             audio=None, chat_id=12345, message_id=message_id,
-            date=datetime.now(timezone.utc), reply_text=AsyncMock(),
+            date=datetime.now(timezone.utc), reply_text=AsyncMock(return_value=NS(message_id=1000 + message_id)),
         ),
     )
 
 
 def make_context(queue):
-    telegram_bot = NS(send_message=AsyncMock(), get_file=AsyncMock())
+    telegram_bot = NS(send_message=AsyncMock(return_value=NS(message_id=2000)),
+                      edit_message_text=AsyncMock(), get_file=AsyncMock())
     return NS(application=NS(bot_data={"processing_queue": queue}),
               bot=telegram_bot, args=[])
 
@@ -40,7 +41,7 @@ def save_entry(db, message_id, **kwargs):
     )
 
 
-def test_receives_three_audios_and_help_while_worker_is_busy(db, tmp_path, monkeypatch, analysis):
+def test_receives_three_audios_and_start_while_worker_is_busy(db, tmp_path, monkeypatch, analysis):
     monkeypatch.setattr(bot, "AUDIO_DIR", tmp_path)
     async def scenario():
         queue = ProcessingQueue()
@@ -69,7 +70,7 @@ def test_receives_three_audios_and_help_while_worker_is_busy(db, tmp_path, monke
             await asyncio.wait_for(bot.recibir_audio(updates[1], context), 3)
             await asyncio.wait_for(bot.recibir_audio(updates[2], context), 3)
             help_update = make_update(4)
-            await asyncio.wait_for(bot.help_command(help_update, context), 1)
+            await asyncio.wait_for(bot.start(help_update, context), 1)
             assert help_update.message.reply_text.await_count == 1
             assert queue.pending_count == 3
             assert "Hay 1 entrada delante" in updates[1].message.reply_text.await_args.args[0]
@@ -101,6 +102,7 @@ def test_acknowledges_persisted_entry_before_downloading(db, tmp_path, monkeypat
         async def receipt(*args, **kwargs):
             assert db.obtener_entrada_telegram(12345, 1)["status"] == "pending"
             acknowledged.set()
+            return NS(message_id=1001)
 
         async def download(path):
             assert acknowledged.is_set()
@@ -118,10 +120,13 @@ def test_acknowledges_persisted_entry_before_downloading(db, tmp_path, monkeypat
             await asyncio.wait_for(queue.join(), 5)
             assert db.obtener_entrada_telegram(12345, 1)["status"] == "completed"
             context.bot.get_file.assert_awaited_once()
-            for call in context.bot.send_message.await_args_list:
-                assert call.kwargs["chat_id"] == 12345
-                assert call.kwargs["reply_parameters"].message_id == 1
-                assert call.kwargs["reply_parameters"].allow_sending_without_reply is True
+            update.message.reply_text.assert_awaited_once()
+            receipt_args = update.message.reply_text.await_args.kwargs
+            assert receipt_args["reply_parameters"].message_id == 1
+            assert receipt_args["reply_parameters"].allow_sending_without_reply is True
+            assert context.bot.edit_message_text.await_count >= 3
+            assert all(c.kwargs["message_id"] == 1001
+                       for c in context.bot.edit_message_text.await_args_list)
         finally:
             await queue.stop()
     asyncio.run(scenario())
@@ -148,7 +153,7 @@ def test_duplicate_audio_and_retry_do_not_enqueue_active_entry_twice(db, tmp_pat
             await bot.recibir_audio(update, context)
             entry = db.obtener_entrada_telegram(12345, 1)
             context.args = [entry["id"]]
-            await bot.retry_command(update, context)
+            await bot.encolar_entrada(db.obtener_entrada(entry if isinstance(entry, str) else entry["id"]), context, update.message, retry=True)
             assert queue.pending_count == 1
             assert len(calls) == 1
             assert db.obtener_entrada(entry["id"])["status"] == "transcribed"
@@ -302,7 +307,8 @@ def test_failed_analysis_does_not_block_the_next_audio(db, monkeypatch, analysis
     extractor.extract.side_effect = [RuntimeError("PRIVATE"), analysis]
     monkeypatch.setattr(bot, "DiaryExtractor", lambda: extractor)
     async def scenario():
-        queue, telegram_bot = ProcessingQueue(), NS(send_message=AsyncMock())
+        queue, telegram_bot = ProcessingQueue(), NS(send_message=AsyncMock(return_value=NS(message_id=2000)),
+                                                       edit_message_text=AsyncMock())
         for entry_id in (first, second):
             queue.enqueue(entry_id, bot.trabajo_entrada(db.obtener_entrada(entry_id), telegram_bot))
         queue.start()
@@ -324,7 +330,7 @@ def test_retry_marks_failed_entry_pending_and_is_persisted(db):
         queue = ProcessingQueue()
         context, update = make_context(queue), make_update()
         context.args = [entry]
-        await bot.retry_command(update, context)
+        await bot.encolar_entrada(db.obtener_entrada(entry if isinstance(entry, str) else entry["id"]), context, update.message, retry=True)
         assert db.obtener_entrada(entry)["status"] == "pending"
         assert db.obtener_entrada(entry)["transcription"] == "Texto guardado"
         assert queue.pending_count == 1
@@ -337,9 +343,7 @@ def test_slow_commands_do_not_block_reception():
     app = bot.crear_aplicacion()
     handlers = {command: handler for handler in app.handlers[0]
                 if isinstance(handler, CommandHandler) for command in handler.commands}
-    for command in ("report", "delete", "backup"):
-        assert handlers[command].block is False
-    assert handlers["help"].block is True
+    assert set(handlers) == {"start"}
     assert app.post_stop is bot.post_stop
     assert app.concurrent_updates == 1
 
@@ -361,23 +365,6 @@ def test_oversized_and_unauthorized_audio_are_not_queued(db, tmp_path, monkeypat
     asyncio.run(scenario())
 
 
-def test_retry_skips_entries_already_in_queue_before_applying_limit(db):
-    async def scenario():
-        queue = ProcessingQueue()
-        context = make_context(queue)
-        for message_id in range(1, 11):
-            entry_id = save_entry(db, message_id)
-            queue.enqueue(entry_id, AsyncMock())
-        failed = save_entry(db, 11)
-        db.marcar_error(failed, "analysis")
-        await bot.retry_command(make_update(20), context)
-        assert queue.contains(failed)
-        assert queue.pending_count == 11
-        assert db.obtener_entrada(failed)["status"] == "pending"
-        await queue.stop()
-    asyncio.run(scenario())
-
-
 def test_redelivered_failed_message_requires_explicit_retry(db):
     entry = save_entry(db, 1)
     db.marcar_error(entry, "analysis")
@@ -387,6 +374,7 @@ def test_redelivered_failed_message_requires_explicit_retry(db):
         await bot.recibir_audio(update, context)
         assert queue.pending_count == 0
         assert db.obtener_entrada(entry)["status"] == "failed"
-        assert f"/retry {entry}" in update.message.reply_text.await_args.args[0]
+        markup = update.message.reply_text.await_args.kwargs["reply_markup"]
+        assert any(b.callback_data == f"dd:retry:{entry}" for row in markup.inline_keyboard for b in row)
         await queue.stop()
     asyncio.run(scenario())
