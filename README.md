@@ -197,3 +197,39 @@ desde botones, corrección desde la web y evaluación. No envían mensajes reale
 El directorio evaluation contiene un corpus textual sintético inicial, un ejecutor
 con modelos reales y métricas reproducibles. Consulta evaluation/README.md.
 El corpus inicial sirve como comprobación, no como validación científica del TFM.
+
+## Web personal (primera versión)
+
+Instala el grupo opcional y arranca la web desde la raíz del proyecto:
+
+```powershell
+uv sync --locked --group web
+uv run --group web streamlit run web_app.py
+```
+
+Abre  El bot se ejecuta por separado con su comando habitual.
+Ambos leen DATABASE_PATH del mismo .env. Arranca primero el bot para inicializar o
+migrar la base; las consultas de la web abren SQLite en modo de solo lectura y no
+cargan Whisper ni Ollama. Guardar una corrección sí escribe en la base.
+
+La barra lateral ofrece Entradas (calendario mensual y detalle del día), Buscador
+(coincidencia literal sin distinguir mayúsculas, con filtro de fechas) y Estadísticas
+(entradas por día, estados y sentimientos). Pulsa Actualizar datos para releer la base.
+Las fechas del calendario son fechas de envío, no fechas inferidas de acontecimientos.
+Los resultados se muestran de diez en diez. El calendario permite cambiar de mes
+con flechas o con los selectores de mes y año. Desde el detalle del calendario,
+Editar entrada permite corregir la transcripción completa, guardar o cancelar.
+Se conserva el original, se invalida el análisis anterior y el bot recoge las
+entradas pendientes cada cinco segundos para regenerarlo. Reinicia una vez el bot
+tras instalar esta actualización para activar esa recogida; si está apagado, las
+correcciones de entradas Telegram se recuperan al arrancar. Las entradas antiguas
+sin identidad Telegram requieren gestión local para regenerar su análisis. No se pueden editar entradas en proceso;
+una edición obsoleta no sobrescribe cambios posteriores.
+Las preguntas en lenguaje natural quedan pendientes de una siguiente fase.
+Telegram queda centrado en recibir audios y comunicar su procesamiento.
+
+Por defecto solo escucha en interfaz local y no tiene autenticación propia. Para acceder
+remotamente, usa un túnel SSH o acceso privado autenticado; no expongas el puerto
+públicamente. La web muestra contenido personal del diario.
+
+Pruebas incluyendo la interfaz: `uv run --group web python -m pytest -q`.

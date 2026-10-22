@@ -1,0 +1,84 @@
+from datetime import date
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from src import database, web_data
+
+
+def test_read_only_search_dates_and_literal_text(db):
+    entry_id = db.guardar_entrada("MARTA: 100% feliz", recorded_at="2026-10-21T23:30:00+00:00")
+    assert not web_data.entries(date(2026, 10, 21), date(2026, 10, 21))
+    rows = web_data.entries(date(2026, 10, 22), date(2026, 10, 22), "marta")
+    assert [r["id"] for r in rows] == [entry_id]
+    assert len(web_data.entries(date(2026, 10, 22), date(2026, 10, 22), "%")) == 1
+    assert not web_data.entries(date(2026, 10, 22), date(2026, 10, 22), "_")
+    with web_data.read_connection() as conn:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            conn.execute("DELETE FROM diary_entries")
+
+
+def test_details_include_analysis(db, analysis):
+    entry_id = db.guardar_entrada("Paseo", entities=[("person", "Ana")], emotions=["alegria"])
+    assert web_data.details(entry_id)["entities"] == [{"entity_type": "person", "entity": "Ana"}]
+    assert web_data.details(entry_id)["emotions"] == ["alegria"]
+    assert web_data.details("missing") is None
+
+
+def test_web_navigation(db):
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "web_app.py", default_timeout=15).run()
+    assert not app.exception
+    for section in ("Buscador", "Estadísticas", "Entradas"):
+        app.sidebar.button(key="nav_" + section).click().run()
+        assert not app.exception
+
+
+def test_missing_database_is_not_created(tmp_path, monkeypatch):
+    import sqlite3
+
+    path = tmp_path / "missing.db"
+    monkeypatch.setattr(database, "DB_PATH", path)
+    with pytest.raises(sqlite3.OperationalError):
+        web_data.entries(date(2026, 1, 1), date(2026, 12, 31))
+    assert not path.exists()
+
+
+def test_calendar_arrows_and_edit(db):
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+
+    entry_id = db.guardar_entrada("Texto original", recorded_at="2026-12-01T12:00:00+01:00")
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "web_app.py", default_timeout=15)
+    app.session_state["calendar_year"] = 2026
+    app.session_state["calendar_month"] = 12
+    app.session_state["diary_day"] = date(2026, 12, 1)
+    app.run()
+    next(b for b in app.button if b.label == "→").click().run()
+    assert app.number_input[0].value == 2027
+    assert app.selectbox(key="calendar_month").value == 1
+    next(b for b in app.button if b.label == "←").click().run()
+    assert app.number_input[0].value == 2026
+    assert app.selectbox(key="calendar_month").value == 12
+    app.button(key="open_" + entry_id).click().run()
+    app.text_area[0].input("Texto corregido desde la web")
+    next(b for b in app.button if b.label == "Guardar cambios").click().run()
+    assert not app.exception
+    saved = db.obtener_entrada(entry_id)
+    assert saved["transcription"] == "Texto corregido desde la web"
+    assert saved["original_transcription"] == "Texto original"
+    assert saved["status"] == "pending"
+
+
+def test_web_edit_detects_conflicting_change(db):
+    import hashlib
+
+    entry_id = db.guardar_entrada("Original")
+    expected = hashlib.sha256(b"Original").hexdigest()
+    db.corregir_transcripcion(entry_id, "Primera corrección", expected)
+    with pytest.raises(ValueError, match="cambiado"):
+        db.corregir_transcripcion(entry_id, "Edición obsoleta", expected)
+    assert db.obtener_entrada(entry_id)["transcription"] == "Primera corrección"
