@@ -6,9 +6,10 @@ import time
 import uuid
 from contextlib import suppress
 from datetime import date
+from dataclasses import dataclass
 from pathlib import Path
 
-from telegram import BotCommand, Update
+from telegram import BotCommand, ReplyParameters, Update
 from telegram.error import TelegramError
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
@@ -21,6 +22,7 @@ from src.llm.extractor import DiaryExtractor
 from src.llm.prompts import PROMPT_VERSION
 from src.maintenance import audio_seguro, borrar_audio, crear_backup, mantenimiento
 from src.transcriber import transcribir
+from src.processing_queue import ProcessingQueue
 
 logger = logging.getLogger(__name__)
 MAX_TELEGRAM_MESSAGE_CHARS = 800
@@ -65,6 +67,72 @@ async def enviar_texto(message, text):
         # Telegram error details can include requests or user content.
         logger.warning("No se pudo enviar la respuesta: %s", type(error).__name__)
         return False
+
+
+@dataclass(frozen=True)
+class EntryReplyTarget:
+    """Keep replies attached to the source audio, including after a restart."""
+    bot: object
+    chat_id: int
+    message_id: int
+
+    async def reply_text(self, text, **kwargs):
+        return await self.bot.send_message(
+            chat_id=self.chat_id, text=text,
+            reply_parameters=ReplyParameters(
+                message_id=self.message_id, allow_sending_without_reply=True,
+            ),
+            **kwargs,
+        )
+
+
+def trabajo_entrada(entry, telegram_bot, fallback_message=None):
+    entry_id = entry["id"]
+    if entry["telegram_chat_id"] is not None and entry["telegram_message_id"] is not None:
+        target = EntryReplyTarget(
+            telegram_bot, entry["telegram_chat_id"], entry["telegram_message_id"],
+        )
+    else:
+        target = fallback_message
+
+    async def run():
+        # Read again under the operation lock: a waiting entry may have been deleted.
+        async with _processing_lock:
+            current = await asyncio.to_thread(database.obtener_entrada, entry_id)
+            if current is not None:
+                await procesar_entrada(current, telegram_bot, target)
+    return run
+
+
+async def encolar_entrada(entry, context, message, *, retry=False):
+    queue = context.application.bot_data["processing_queue"]
+    key = entry["id"]
+    if queue.contains(key):
+        await enviar_texto(message, "Esta entrada ya está en cola o se está procesando.")
+        return False
+    if retry:
+        await asyncio.to_thread(database.preparar_reintento, key)
+    ahead = queue.pending_count
+    text = "Entrada preparada para reintentar." if retry else "🎙️ Audio recibido."
+    if ahead:
+        unit = "entrada" if ahead == 1 else "entradas"
+        text += f" Hay {ahead} {unit} delante. Te avisaré cuando termine."
+    else:
+        text += " Lo procesaré a continuación."
+    # Acknowledge before waking the worker. Failed Telegram delivery must not lose the job.
+    await enviar_texto(message, text)
+    return queue.enqueue(key, trabajo_entrada(entry, context.bot, message))
+
+
+async def recuperar_cola(application):
+    queue = application.bot_data["processing_queue"]
+    recovered = 0
+    for entry in await asyncio.to_thread(database.entradas_pendientes):
+        if (entry["status"] in ("pending", "transcribed")
+                and entry["telegram_chat_id"] == TELEGRAM_USER_ID
+                and entry["telegram_message_id"] is not None):
+            recovered += queue.enqueue(entry["id"], trabajo_entrada(entry, application.bot))
+    return recovered
 
 
 def formatear_informe(transcription, analysis, transcription_time, llm_time):
@@ -136,6 +204,7 @@ async def report_command(update, context):
     except ValueError:
         await enviar_texto(update.message, "Uso: /report YYYY-MM-DD")
         return
+    await enviar_texto(update.message, "Reporte solicitado. Puedes seguir enviando audios mientras lo preparo.")
     async with _processing_lock:
         try:
             report = await asyncio.to_thread(
@@ -189,7 +258,7 @@ async def procesar_entrada(entry, bot, message, extractor=None):
                     partial.replace(ruta)
                 finally:
                     partial.unlink(missing_ok=True)
-            await enviar_texto(message, "🎙️ Audio recibido. Transcribiendo...")
+            await enviar_texto(message, "✍️ Transcribiendo tu entrada...")
             stage = "transcription"
             started = time.perf_counter()
             text = await asyncio.to_thread(transcribir, ruta)
@@ -233,25 +302,27 @@ async def recibir_audio(update, context):
     if (audio.file_size or 0) > MAX_AUDIO_BYTES or (duration or 0) > MAX_AUDIO_SECONDS:
         await enviar_texto(message, f"Audio demasiado grande. Máximo {MAX_AUDIO_BYTES // 1000000} MB y {MAX_AUDIO_SECONDS // 60} minutos.")
         return
-    async with _processing_lock:
-        existing = await asyncio.to_thread(
-            database.obtener_entrada_telegram, message.chat_id, message.message_id,
+    existing = await asyncio.to_thread(
+        database.obtener_entrada_telegram, message.chat_id, message.message_id,
+    )
+    if existing and existing["status"] in ("completed", "empty"):
+        await enviar_texto(message, f"Este mensaje ya está registrado. ID: {existing['id']}")
+        return
+    if existing and existing["status"] == "failed":
+        await enviar_texto(message, f"Esta entrada no pudo completarse. Usa /retry {existing['id']}.")
+        return
+    if not existing:
+        AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+        suffix = ".ogg" if message.voice else ".audio"
+        path = AUDIO_DIR / f"{uuid.uuid4()}{suffix}"
+        entry_id = await asyncio.to_thread(
+            database.guardar_entrada, "", received_at=database.ahora(),
+            recorded_at=message.date.isoformat(), audio_path=str(path),
+            telegram_chat_id=message.chat_id, telegram_message_id=message.message_id,
+            telegram_file_id=audio.file_id, status="pending",
         )
-        if existing and existing["status"] in ("completed", "empty"):
-            await enviar_texto(message, f"Este mensaje ya está registrado. ID: {existing['id']}")
-            return
-        if not existing:
-            AUDIO_DIR.mkdir(parents=True, exist_ok=True)
-            suffix = ".ogg" if message.voice else ".audio"
-            path = AUDIO_DIR / f"{uuid.uuid4()}{suffix}"
-            entry_id = await asyncio.to_thread(
-                database.guardar_entrada, "", received_at=database.ahora(),
-                recorded_at=message.date.isoformat(), audio_path=str(path),
-                telegram_chat_id=message.chat_id, telegram_message_id=message.message_id,
-                telegram_file_id=audio.file_id, status="pending",
-            )
-            existing = await asyncio.to_thread(database.obtener_entrada, entry_id)
-        await procesar_entrada(existing, context.bot, message)
+        existing = await asyncio.to_thread(database.obtener_entrada, entry_id)
+    await encolar_entrada(existing, context, message)
 
 
 async def retry_command(update, context):
@@ -260,16 +331,19 @@ async def retry_command(update, context):
     if len(context.args) > 1:
         await enviar_texto(update.message, "Uso: /retry [ID]")
         return
-    async with _processing_lock:
-        if context.args:
-            entry = await asyncio.to_thread(database.obtener_entrada, context.args[0])
-            entries = [entry] if entry and entry["status"] != "empty" else []
-        else:
-            entries = (await asyncio.to_thread(database.entradas_pendientes))[:10]
-        if not entries:
-            await enviar_texto(update.message, "No hay entradas pendientes para reintentar.")
-        for entry in entries:
-            await procesar_entrada(entry, context.bot, update.message)
+    if context.args:
+        entry = await asyncio.to_thread(database.obtener_entrada, context.args[0])
+        entries = [entry] if entry and entry["status"] != "empty" else []
+    else:
+        queue = context.application.bot_data["processing_queue"]
+        entries = [
+            entry for entry in await asyncio.to_thread(database.entradas_pendientes)
+            if not queue.contains(entry["id"])
+        ][:10]
+    if not entries:
+        await enviar_texto(update.message, "No hay entradas pendientes para reintentar.")
+    for entry in entries:
+        await encolar_entrada(entry, context, update.message, retry=True)
 
 
 async def delete_command(update, context):
@@ -317,23 +391,37 @@ async def post_init(application):
             ("delete", "Borrar entrada"), ("backup", "Copia de seguridad local"),
         ]
     ])
-    pending = len(await asyncio.to_thread(database.entradas_pendientes))
+    application.bot_data["processing_queue"] = ProcessingQueue()
+    recovered = await recuperar_cola(application)
+    pending = len(await asyncio.to_thread(database.entradas_pendientes)) - recovered
+    recovery_notice = f"\nRetomaré {recovered} entradas que quedaron interrumpidas." if recovered else ""
     try:
         await application.bot.send_message(
             chat_id=TELEGRAM_USER_ID,
-            text=MENSAJE_BIENVENIDA + (f"\nHay {pending} entradas pendientes. Usa /retry." if pending else ""),
+            text=MENSAJE_BIENVENIDA + recovery_notice + (f"\nHay {pending} entradas que necesitan /retry." if pending else ""),
         )
     except TelegramError as error:
         logger.warning("Bienvenida no enviada: %s", type(error).__name__)
+    application.bot_data["processing_queue"].start()
     application.bot_data["maintenance_task"] = asyncio.create_task(maintenance_loop(application))
 
 
-async def post_shutdown(application):
+async def post_stop(application):
+    # run_polling calls this before closing the Telegram client.
+    # Finish active inference; leave queued entries in SQLite for next startup.
     task = application.bot_data.get("maintenance_task")
     if task:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+    queue = application.bot_data.get("processing_queue")
+    if queue:
+        await queue.stop()
+
+
+async def post_shutdown(application):
+    # Idempotent fallback if startup failed before Application.start().
+    await post_stop(application)
 
 
 async def on_error(update, context):
@@ -346,13 +434,14 @@ def crear_aplicacion():
     validar_telegram()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.post_init = post_init
+    app.post_stop = post_stop
     app.post_shutdown = post_shutdown
     for name, handler in [
         ("start", start), ("help", help_command), ("report", report_command),
         ("entries", entries_command), ("retry", retry_command),
         ("delete", delete_command), ("backup", backup_command),
     ]:
-        app.add_handler(CommandHandler(name, handler))
+        app.add_handler(CommandHandler(name, handler, block=name not in {"report", "delete", "backup"}))
     app.add_handler(MessageHandler(filters.ChatType.PRIVATE & (filters.VOICE | filters.AUDIO), recibir_audio))
     app.add_error_handler(on_error)
     return app

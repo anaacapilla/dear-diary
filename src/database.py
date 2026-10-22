@@ -232,6 +232,15 @@ def marcar_error(entry_id, stage):
         conn.execute("DELETE FROM daily_reports")
 
 
+def preparar_reintento(entry_id):
+    with conectar() as conn:
+        conn.execute(
+            "UPDATE diary_entries SET status='pending', error_code=NULL WHERE id=? AND status!='empty'",
+            (entry_id,),
+        )
+        conn.execute("DELETE FROM daily_reports")
+
+
 def entradas_pendientes():
     with conectar() as conn:
         return [dict(r) for r in conn.execute(

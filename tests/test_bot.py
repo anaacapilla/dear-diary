@@ -84,17 +84,16 @@ def test_failed_llm_preserves_text_retry_skips_whisper(db, tmp_path, monkeypatch
 
 
 def test_same_filename_uses_distinct_paths(db, tmp_path, monkeypatch):
+    from src.processing_queue import ProcessingQueue
     monkeypatch.setattr(bot, "AUDIO_DIR", tmp_path)
-    process = AsyncMock()
-    monkeypatch.setattr(bot, "procesar_entrada", process)
-    context = NS(bot=None)
+    context = NS(bot=None, application=NS(bot_data={"processing_queue": ProcessingQueue()}))
     async def run():
         await bot.recibir_audio(update(message_id=1), context)
         await bot.recibir_audio(update(message_id=2), context)
     asyncio.run(run())
-    paths = [c.args[0]["audio_path"] for c in process.await_args_list]
-    assert len(set(paths)) == 2
-    assert all("audio.mp3" not in p for p in paths)
+    paths = [entry["audio_path"] for entry in db.entradas_pendientes()]
+    assert len(paths) == 2 and len(set(paths)) == 2
+    assert all("audio.mp3" not in path for path in paths)
 
 
 def test_strict_date_argument():

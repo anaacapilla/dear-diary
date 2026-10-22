@@ -42,8 +42,8 @@ sus propias dependencias adicionales.
 - /help: ayuda y política de conservación.
 - /report YYYY-MM-DD: reporte de una fecha en la zona del diario.
 - /entries YYYY-MM-DD: identificadores y estados de las entradas del día.
-- /retry: reintenta hasta diez entradas pendientes o fallidas.
-- /retry ID: reintenta una entrada concreta, o vuelve a analizar una entrada terminada.
+- /retry: añade a la cola hasta diez entradas pendientes o fallidas.
+- /retry ID: añade una entrada concreta a la cola, o vuelve a analizar una terminada.
 - /delete ID: borra una entrada, sus relaciones y su archivo de audio.
 - /backup: guarda una copia adicional de SQLite en el equipo que ejecuta el bot.
 
@@ -58,7 +58,8 @@ no duplica una entrada, pero dos mensajes con las mismas palabras sí crean dos 
 Sin identidad de Telegram, cada llamada de guardado crea una entrada independiente.
 
 1. Guarda una entrada pending con el identificador del archivo de Telegram.
-2. Descarga el audio con un nombre UUID y renombrado atómico desde un archivo .part.
+2. Confirma la recepción y añade la entrada a la cola. Un único trabajador descarga
+   el audio con un nombre UUID y renombrado atómico desde un archivo .part.
 3. Transcribe y guarda el texto antes de llamar al LLM: estado transcribed.
 4. Valida el JSON y guarda el análisis y todas sus relaciones en una transacción: completed.
 5. Si no hay voz, marca empty. Si falla una etapa, marca failed y conserva lo ya guardado.
@@ -66,7 +67,9 @@ Sin identidad de Telegram, cada llamada de guardado crea una entrada independien
 Un fallo de Ollama no borra la transcripción. /retry reutiliza el texto existente.
 Si todavía no hay transcripción y ya caducó el audio, intenta descargarlo otra vez de
 Telegram; la recuperación depende de que Telegram siga ofreciendo ese archivo.
-Al arrancar avisa de las entradas pendientes; no las reprocesa todas sin control.
+Al arrancar recupera automáticamente las entradas interrumpidas en estado pending
+o transcribed que tienen un mensaje de Telegram del usuario autorizado.
+Las entradas failed y las antiguas sin destino de Telegram requieren /retry.
 No se descartan las actualizaciones que Telegram tenga pendientes al reiniciar.
 Telegram no es una cola duradera ilimitada: conserva actualizaciones durante un periodo
 limitado, por lo que conviene mantener el bot ejecutándose.
@@ -81,6 +84,56 @@ esta separación y el esquema JSON no garantizan por sí solos la fidelidad sem�
 Las respuestas largas se dividen en mensajes de hasta 3500 unidades UTF-16, incluyendo
 listas largas y caracteres emoji. El resumen del informe individual se abrevia en
 Telegram, mientras que SQLite conserva el resumen completo.
+
+## Mejora de experiencia 1: recepción y cola
+
+Esta entrega incorpora únicamente la recepción con cola. La edición de mensajes de
+progreso, los botones y las demás mejoras de experiencia quedan para entregas posteriores.
+
+- La recepción registra primero la entrada en SQLite y confirma antes de descargar
+  el audio o cargar Whisper: «Audio recibido. Lo procesaré a continuación».
+- Si hay más audios, indica cuántas entradas tiene delante, incluyendo la activa.
+  Es una instantánea al confirmar; el mensaje no se actualiza mientras avanza la cola.
+- Un único trabajador procesa las entradas en orden FIFO durante la sesión.
+  No se ejecutan varias transcripciones o análisis de entradas en paralelo.
+- Puedes enviar más audios y usar /help o /entries mientras trabaja. Las operaciones
+  largas de /report, /backup y /delete se atienden en segundo plano y esperan su turno
+  para acceder a los recursos compartidos; no bloquean la recepción de nuevos audios.
+- /retry utiliza la misma cola. Una entrada que ya está esperando o procesándose no
+  se añade otra vez. Una entrada fallida se marca pending al solicitar el reintento,
+  conservando su transcripción.
+- Los mensajes de procesamiento y el resultado responden al audio original, también
+  cuando se retoma tras reiniciar. Si el audio se ha eliminado del chat, el bot intenta
+  entregar igualmente la respuesta.
+- Un fallo de análisis no detiene las entradas siguientes. Si Telegram no entrega la
+  confirmación, la entrada permanece registrada y su procesamiento continúa.
+- La cola de ejecución está en memoria y los datos y estados están en SQLite.
+  Al reiniciar se recuperan pending y transcribed por orden de registro.
+  Los fallos no se reintentan automáticamente para evitar bucles de errores.
+- Al detener con Ctrl+C se deja terminar la entrada activa antes de cerrar la conexión
+  con Telegram. Las entradas aún sin empezar quedan pendientes para el siguiente
+  arranque. El cierre puede tardar si el audio activo todavía se está procesando.
+- Los reportes y otras solicitudes de comandos no son trabajos persistentes:
+  si una interrupción impide responderlos, vuelve a ejecutar el comando.
+
+No requiere cambios de esquema ni dependencias nuevas.
+
+### Prueba manual de esta entrega
+
+1. Arranca una única instancia con `uv run python -m src.bot`.
+2. Envía tres notas de voz seguidas, sin esperar al primer resultado.
+3. Comprueba que cada una recibe confirmación antes de su procesamiento y que la
+   segunda y la tercera indican las entradas que tienen delante cuando corresponde.
+4. Mientras se analiza la primera, envía /help y consulta /entries con la fecha de hoy.
+   Deben responder sin esperar a que terminen todos los audios.
+5. Comprueba que los resultados llegan por orden y responden a su audio correspondiente.
+6. Ejecuta /retry ID sobre una entrada en cola: debe indicar que ya está esperando
+   o procesándose, sin duplicar el trabajo.
+7. Para comprobar la recuperación, envía varios audios y pulsa Ctrl+C mientras se
+   procesa el primero. Espera al cierre y vuelve a arrancar: los que no habían
+   empezado deben retomarse automáticamente.
+8. Opcionalmente, detén Ollama para provocar un fallo: el bot debe conservar la
+   transcripción y seguir atendiendo entradas. Vuelve a iniciarlo y usa /retry ID.
 
 ## Reportes y fechas
 
@@ -151,7 +204,8 @@ uv run python -m pytest -q
 Las pruebas usan SQLite temporal, clientes simulados y credenciales ficticias.
 Cubren guardado de relaciones, deduplicación, medianoche y cambios de horario,
 migración y restauración, reintentos, límites de Telegram, privacidad, retención,
-síntesis y evaluación. No envían mensajes reales ni consumen modelos.
+síntesis, cola FIFO, recepción durante el procesamiento, recuperación al reiniciar,
+apagado y evaluación. No envían mensajes reales ni consumen modelos.
 
 El directorio evaluation contiene un corpus textual sintético inicial, un ejecutor
 con modelos reales y métricas reproducibles. Consulta evaluation/README.md.
