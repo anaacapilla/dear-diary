@@ -207,7 +207,12 @@ uv sync --locked --group web
 uv run --group web streamlit run web_app.py
 ```
 
-Abre  El bot se ejecuta por separado con su comando habitual.
+Mantén la terminal abierta mientras uses la web;
+para detenerla, pulsa Ctrl+C. El acceso local funciona solo desde ese ordenador.
+
+Puedes consultar las entradas guardadas sin arrancar el bot. Para recibir audios
+nuevos y regenerar los análisis tras una corrección, el bot debe estar funcionando
+también. El bot se ejecuta por separado con su comando habitual.
 Ambos leen DATABASE_PATH del mismo .env. Arranca primero el bot para inicializar o
 migrar la base; las consultas de la web abren SQLite en modo de solo lectura y no
 cargan Whisper ni Ollama. Guardar una corrección sí escribe en la base.
@@ -228,7 +233,7 @@ una edición obsoleta no sobrescribe cambios posteriores.
 Las preguntas en lenguaje natural quedan pendientes de una siguiente fase.
 Telegram queda centrado en recibir audios y comunicar su procesamiento.
 
-Por defecto solo escucha en interfaz local y no tiene autenticación propia. Para acceder
+Por defecto solo escucha en la interfaz local y no tiene autenticación propia. Para acceder
 remotamente, usa un túnel SSH o acceso privado autenticado; no expongas el puerto
 públicamente. La web muestra contenido personal del diario.
 
