@@ -47,6 +47,40 @@ def test_missing_database_is_not_created(tmp_path, monkeypatch):
     assert not path.exists()
 
 
+def test_web_startup_migrates_existing_diary_without_bot(db):
+    entry = db.guardar_entrada("Marta", entities=[("person", "Marta")])
+    with db.conectar() as conn:
+        for table in ("person_mentions", "person_groups", "person_aliases", "people"):
+            conn.execute(f"DROP TABLE {table}")
+        conn.execute("PRAGMA user_version=3")
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "web_app.py", default_timeout=20).run()
+    assert not app.exception
+    assert not app.error
+    with db.conectar() as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
+        assert conn.execute("SELECT mention FROM person_mentions WHERE entry_id=?", (entry,)).fetchone()[0] == "Marta"
+    assert len(list((db.DB_PATH.parent / "backups").glob("migration-*.sqlite3"))) == 1
+    web_data.prepare_database()
+    assert len(list((db.DB_PATH.parent / "backups").glob("migration-*.sqlite3"))) == 1
+
+
+def test_web_startup_does_not_create_missing_diary(tmp_path, monkeypatch):
+    path = tmp_path / "missing.db"
+    monkeypatch.setattr(database, "DB_PATH", path)
+    with pytest.raises(sqlite3.OperationalError):
+        web_data.prepare_database()
+    assert not path.exists()
+
+
+def test_web_startup_rejects_newer_database(db):
+    with db.conectar() as conn:
+        conn.execute(f"PRAGMA user_version={db.SCHEMA_VERSION + 1}")
+    with pytest.raises(ValueError, match="más reciente"):
+        web_data.prepare_database()
+
+
 def test_calendar_arrows_and_edit(db):
     pytest.importorskip("streamlit")
     from streamlit.testing.v1 import AppTest

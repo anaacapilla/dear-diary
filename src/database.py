@@ -9,7 +9,7 @@ from datetime import date, datetime
 from src.config import DATABASE_PATH, DIARY_TZ
 
 DB_PATH = DATABASE_PATH
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 6
 
 
 def ahora():
@@ -71,6 +71,9 @@ def inicializar_db():
             stamp = datetime.now(DIARY_TZ).strftime("%Y%m%d-%H%M%S-%f")
             backup_database(path.parent / "backups" / f"migration-{stamp}.sqlite3")
     with conectar() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if conn.execute("PRAGMA user_version").fetchone()[0] > SCHEMA_VERSION:
+            raise RuntimeError("La base de datos pertenece a una versión más reciente")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS diary_entries (
                 id TEXT PRIMARY KEY, hash TEXT UNIQUE NOT NULL,
@@ -107,6 +110,8 @@ def inicializar_db():
             entry_id TEXT NOT NULL REFERENCES diary_entries(id),
             entity_id TEXT NOT NULL REFERENCES entities(id),
             PRIMARY KEY(entry_id, entity_id))""")
+        from src.people import create_schema
+        create_schema(conn)
         conn.execute("""CREATE TABLE IF NOT EXISTS emotions (
             id TEXT PRIMARY KEY, emotion TEXT NOT NULL UNIQUE)""")
         conn.execute("""CREATE TABLE IF NOT EXISTS entry_emotions (
@@ -187,9 +192,13 @@ def guardar_entrada(
 
 
 def _guardar_relaciones(conn, entry_id, entities, emotions):
+    from src.people import record_mentions
     conn.execute("DELETE FROM entry_entities WHERE entry_id=?", (entry_id,))
     conn.execute("DELETE FROM entry_emotions WHERE entry_id=?", (entry_id,))
     for entity_type, value in set(entities):
+        if entity_type == "person":
+            # Raw mentions have their own namespace; only accepted identities use person.
+            entity_type = "person_mention"
         value = value.strip()
         if not value:
             continue
@@ -202,6 +211,7 @@ def _guardar_relaciones(conn, entry_id, entities, emotions):
             (entity_type, value),
         ).fetchone()["id"]
         conn.execute("INSERT OR IGNORE INTO entry_entities VALUES(?,?)", (entry_id, entity_id))
+    record_mentions(conn, entry_id, entities)
     for emotion in set(emotions):
         conn.execute("INSERT INTO emotions VALUES(?,?) ON CONFLICT(emotion) DO NOTHING",
                      (str(uuid.uuid4()), emotion))
@@ -283,7 +293,8 @@ def actualizar_reporte_diario(fecha, *, llm_model=None, llm_prompt_version=None,
     entries = [e for e in entries_all if e["status"] == "completed"]
     with conectar() as conn:
         entities = conn.execute("""
-            SELECT DISTINCT en.entity_type, en.entity FROM entities en
+            SELECT DISTINCT CASE en.entity_type WHEN 'person_mention' THEN 'person'
+                ELSE en.entity_type END AS entity_type, en.entity FROM entities en
             JOIN entry_entities ee ON ee.entity_id=en.id
             JOIN diary_entries d ON d.id=ee.entry_id
             WHERE diary_date(COALESCE(d.recorded_at,d.received_at,d.created_at))=?
@@ -354,7 +365,7 @@ def borrar_entrada(entry_id):
         conn.execute("DELETE FROM entry_entities WHERE entry_id=?", (entry_id,))
         conn.execute("DELETE FROM entry_emotions WHERE entry_id=?", (entry_id,))
         conn.execute("DELETE FROM diary_entries WHERE id=?", (entry_id,))
-        conn.execute("DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM entry_entities)")
+        conn.execute("DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM entry_entities) AND id NOT IN (SELECT entity_id FROM people)")
         conn.execute("DELETE FROM emotions WHERE id NOT IN (SELECT emotion_id FROM entry_emotions)")
         conn.execute("DELETE FROM daily_reports")
     return {"audio_path": row["audio_path"]}
@@ -387,7 +398,8 @@ def obtener_detalles(entry_id):
             return None
         entry = dict(row)
         entities = conn.execute(
-            """SELECT en.entity_type, en.entity FROM entities en
+            """SELECT DISTINCT CASE en.entity_type WHEN 'person_mention' THEN 'person'
+                   ELSE en.entity_type END AS entity_type, en.entity FROM entities en
                JOIN entry_entities ee ON ee.entity_id=en.id
                WHERE ee.entry_id=? ORDER BY en.entity""", (entry_id,),
         ).fetchall()

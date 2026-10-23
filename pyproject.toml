@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-web = ["streamlit>=1.45,<2"]
+web = ["streamlit>=1.66,<2"]
 dev = ["pytest>=8.3,<10"]
 notebooks = ["ipykernel>=7.3.0", "pandas>=3.0.5", "transformers>=4.57.0"]
 

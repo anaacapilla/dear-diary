@@ -1,8 +1,27 @@
-"""Read-only queries for the diary UI; no model or Telegram dependency."""
+"""Diary UI startup and read-only queries; no model or Telegram dependency."""
 import sqlite3
 from contextlib import contextmanager
 
 from src import database
+
+
+def prepare_database():
+    """Migrate an existing diary without silently creating one at a wrong path."""
+    uri = database.DB_PATH.resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=30)
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='diary_entries'"
+        ).fetchone()
+        if not exists:
+            raise ValueError("La base de datos no contiene un diario.")
+        if version > database.SCHEMA_VERSION:
+            raise ValueError("La base de datos pertenece a una versión más reciente.")
+    finally:
+        conn.close()
+    if version < database.SCHEMA_VERSION:
+        database.inicializar_db()
 
 
 @contextmanager
@@ -15,7 +34,7 @@ def read_connection():
     try:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version != database.SCHEMA_VERSION:
-            raise ValueError("Arranca el bot para actualizar el esquema de la base de datos.")
+            raise ValueError("Recarga la web para actualizar el esquema de la base de datos.")
         yield conn
     finally:
         conn.close()
@@ -43,9 +62,10 @@ def details(entry_id):
             return None
         result = dict(row)
         result["entities"] = [dict(r) for r in conn.execute("""
-            SELECT en.entity_type, en.entity FROM entities en
+            SELECT DISTINCT CASE en.entity_type WHEN 'person_mention' THEN 'person'
+                ELSE en.entity_type END AS entity_type, en.entity FROM entities en
             JOIN entry_entities ee ON ee.entity_id=en.id WHERE ee.entry_id=?
-            ORDER BY en.entity_type, en.entity
+            ORDER BY entity_type, en.entity
         """, (entry_id,))]
         result["emotions"] = [r[0] for r in conn.execute("""
             SELECT e.emotion FROM emotions e JOIN entry_emotions ee ON ee.emotion_id=e.id
