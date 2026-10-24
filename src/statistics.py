@@ -54,7 +54,7 @@ def emotion_counts(start, end):
             FROM diary_entries d JOIN entry_emotions ee ON ee.entry_id=d.id
             JOIN emotions e ON e.id=ee.emotion_id
             WHERE d.status='completed'
-            AND diary_date(COALESCE(d.recorded_at,d.received_at,d.created_at)) BETWEEN ? AND ?
+            AND COALESCE(d.entry_date, diary_date(COALESCE(d.recorded_at,d.received_at,d.created_at))) BETWEEN ? AND ?
             GROUP BY e.emotion ORDER BY count DESC, e.emotion
         ''', (start.isoformat(), end.isoformat()))]
 

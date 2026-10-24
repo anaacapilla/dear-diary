@@ -9,11 +9,24 @@ from datetime import date, datetime
 from src.config import DATABASE_PATH, DIARY_TZ
 
 DB_PATH = DATABASE_PATH
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 11
 
 
 def ahora():
     return datetime.now(DIARY_TZ).isoformat()
+
+
+def validar_fecha_entrada(value):
+    """Explicit diary dates are civil dates, independent of upload timestamps."""
+    try:
+        day = date.fromisoformat(value) if isinstance(value, str) else value
+        if not isinstance(day, date) or isinstance(day, datetime):
+            raise ValueError
+        if day < date(1900, 1, 1) or day > datetime.now(DIARY_TZ).date():
+            raise ValueError
+        return day.isoformat()
+    except (TypeError, ValueError):
+        raise ValueError("Elige una fecha válida entre 01/01/1900 y hoy.") from None
 
 
 def _obtener_fecha_desde_iso(value):
@@ -95,6 +108,10 @@ def inicializar_db():
             "transcription_seconds": "REAL",
             "analysis_seconds": "REAL",
             "audio_seconds": "REAL",
+            "entry_date": "TEXT",
+            "source": "TEXT NOT NULL DEFAULT 'legacy'",
+            "processing": "INTEGER NOT NULL DEFAULT 0",
+            "web_request_id": "TEXT",
         }
         for name, definition in additions.items():
             if name not in columns:
@@ -129,10 +146,26 @@ def inicializar_db():
             prompt_message_id INTEGER NOT NULL UNIQUE, expected_hash TEXT NOT NULL,
             requested_at REAL NOT NULL, progress_message_id INTEGER NOT NULL
         )""")
+        conn.execute("""CREATE TABLE IF NOT EXISTS telegram_entry_dates (
+            chat_id INTEGER PRIMARY KEY, command_message_id INTEGER NOT NULL,
+            entry_date TEXT)""")
+        conn.execute("CREATE TABLE IF NOT EXISTS audio_deletions (path TEXT PRIMARY KEY)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS web_request_unique ON diary_entries(web_request_id) WHERE web_request_id IS NOT NULL")
+        conn.execute("""CREATE TABLE IF NOT EXISTS deleted_telegram_messages (
+            chat_id INTEGER NOT NULL, message_id INTEGER NOT NULL,
+            PRIMARY KEY(chat_id, message_id))""")
+        conn.execute("CREATE TABLE IF NOT EXISTS deleted_web_requests (request_id TEXT PRIMARY KEY)")
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < SCHEMA_VERSION:
-            from src.people import repair_overlapping_mentions
-            repair_overlapping_mentions(conn)
+            if version < 9:
+                from src.people import repair_overlapping_mentions
+                repair_overlapping_mentions(conn)
+            conn.execute("""UPDATE diary_entries SET entry_date=
+                COALESCE(entry_date, diary_date(COALESCE(recorded_at, received_at, created_at)))
+                WHERE entry_date IS NULL""")
+            conn.execute("UPDATE diary_entries SET source='telegram' WHERE telegram_chat_id IS NOT NULL AND source='legacy'")
+            for row in conn.execute("SELECT id, transcription FROM diary_entries WHERE content_hash IS NULL").fetchall():
+                conn.execute("UPDATE diary_entries SET content_hash=? WHERE id=?", (hashlib.sha256(row["transcription"].encode()).hexdigest(), row["id"]))
             conn.execute("""UPDATE diary_entries SET original_transcription=transcription
                             WHERE original_transcription IS NULL AND transcription<>''""")
             conn.execute("DELETE FROM daily_reports")
@@ -154,12 +187,17 @@ def obtener_entrada_telegram(chat_id, message_id):
     return dict(row) if row else None
 
 
+def entrada_telegram_borrada(chat_id, message_id):
+    with conectar() as conn:
+        return conn.execute("SELECT 1 FROM deleted_telegram_messages WHERE chat_id=? AND message_id=?", (chat_id, message_id)).fetchone() is not None
+
+
 def guardar_entrada(
     transcription, *, received_at=None, recorded_at=None, audio_path=None,
     summary=None, sentiment=None, events=None, transcription_model=None,
     llm_model=None, llm_prompt_version=None, entities=None, emotions=None,
     telegram_chat_id=None, telegram_message_id=None, telegram_file_id=None,
-    status="completed", audio_seconds=None,
+    status="completed", audio_seconds=None, entry_date=None, source=None, web_request_id=None,
 ):
     if (telegram_chat_id is None) != (telegram_message_id is None):
         raise ValueError("Se necesitan tanto chat_id como message_id")
@@ -167,27 +205,47 @@ def guardar_entrada(
     identity = (f"telegram:{telegram_chat_id}:{telegram_message_id}"
                 if telegram_chat_id is not None else f"entry:{entrada_id}")
     identity_hash = hashlib.sha256(identity.encode()).hexdigest()
+    created_at = ahora()
+    day = validar_fecha_entrada(entry_date) if entry_date is not None else _obtener_fecha_desde_iso(recorded_at or received_at or created_at)
+    source = source or ("telegram" if telegram_chat_id is not None else "legacy")
+    if source not in ("telegram", "web", "legacy"):
+        raise ValueError("Origen de entrada desconocido")
     with conectar() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        if web_request_id:
+            if conn.execute("SELECT 1 FROM deleted_web_requests WHERE request_id=?", (web_request_id,)).fetchone():
+                raise ValueError("Esta entrada ya se borró. Abre Añadir entrada para crear otra.")
+            existing = conn.execute("SELECT id, transcription, entry_date FROM diary_entries WHERE web_request_id=?", (web_request_id,)).fetchone()
+            if existing:
+                if existing["transcription"] != transcription or existing["entry_date"] != day:
+                    raise ValueError("Esta solicitud ya se guardó. Abre una entrada nueva.")
+                return existing["id"]
         if telegram_chat_id is not None:
+            if conn.execute("SELECT 1 FROM deleted_telegram_messages WHERE chat_id=? AND message_id=?", (telegram_chat_id, telegram_message_id)).fetchone():
+                raise ValueError("Esta entrada ya se borró")
             existing = conn.execute(
                 "SELECT id FROM diary_entries WHERE telegram_chat_id=? AND telegram_message_id=?",
                 (telegram_chat_id, telegram_message_id),
             ).fetchone()
             if existing:
                 return existing["id"]
+            intent = conn.execute("SELECT * FROM telegram_entry_dates WHERE chat_id=?", (telegram_chat_id,)).fetchone()
+            if intent and intent["entry_date"] and telegram_message_id > intent["command_message_id"]:
+                day = intent["entry_date"]
+                conn.execute("UPDATE telegram_entry_dates SET entry_date=NULL WHERE chat_id=?", (telegram_chat_id,))
         conn.execute("""
             INSERT INTO diary_entries (
                 id, hash, created_at, received_at, recorded_at, audio_path,
                 transcription, summary, sentiment, events, transcription_model,
                 llm_model, llm_prompt_version, telegram_chat_id, telegram_message_id,
-                telegram_file_id, content_hash, status, audio_seconds
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                telegram_file_id, content_hash, status, audio_seconds, entry_date, source, web_request_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
-            entrada_id, identity_hash, ahora(), received_at, recorded_at, audio_path,
+            entrada_id, identity_hash, created_at, received_at, recorded_at, audio_path,
             transcription, summary, sentiment, json.dumps(events or [], ensure_ascii=False),
             transcription_model, llm_model, llm_prompt_version, telegram_chat_id,
             telegram_message_id, telegram_file_id,
-            hashlib.sha256(transcription.encode()).hexdigest(), status, audio_seconds,
+            hashlib.sha256(transcription.encode()).hexdigest(), status, audio_seconds, day, source, web_request_id,
         ))
         _guardar_relaciones(conn, entrada_id, entities or [], emotions or [])
         conn.execute("DELETE FROM daily_reports")
@@ -276,12 +334,42 @@ def entradas_pendientes():
         )]
 
 
+def indicar_fecha_telegram(chat_id, message_id, day):
+    day = validar_fecha_entrada(day) if day is not None else None
+    with conectar() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current = conn.execute("SELECT command_message_id FROM telegram_entry_dates WHERE chat_id=?", (chat_id,)).fetchone()
+        if current and current[0] >= message_id:
+            return False
+        conn.execute("INSERT INTO telegram_entry_dates VALUES(?,?,?) ON CONFLICT(chat_id) DO UPDATE SET command_message_id=excluded.command_message_id, entry_date=excluded.entry_date", (chat_id, message_id, day))
+    return True
+
+
+def reclamar_entrada(entry_id):
+    with conectar() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        changed = conn.execute("UPDATE diary_entries SET processing=1 WHERE id=? AND processing=0 AND status IN ('pending','transcribed')", (entry_id,)).rowcount
+        row = conn.execute("SELECT * FROM diary_entries WHERE id=?", (entry_id,)).fetchone() if changed else None
+    return dict(row) if row else None
+
+
+def liberar_entrada(entry_id):
+    with conectar() as conn:
+        conn.execute("UPDATE diary_entries SET processing=0 WHERE id=?", (entry_id,))
+
+
+def recuperar_procesamiento():
+    # One bot instance owns the durable queue; a restart releases interrupted work.
+    with conectar() as conn:
+        conn.execute("UPDATE diary_entries SET processing=0")
+
+
 def entradas_del_dia(fecha):
     date.fromisoformat(fecha)
     with conectar() as conn:
         return [dict(r) for r in conn.execute("""
             SELECT * FROM diary_entries
-            WHERE diary_date(COALESCE(recorded_at, received_at, created_at))=?
+            WHERE COALESCE(entry_date, diary_date(COALESCE(recorded_at, received_at, created_at)))=?
             ORDER BY COALESCE(recorded_at, received_at, created_at), id
         """, (fecha,))]
 
@@ -300,14 +388,14 @@ def actualizar_reporte_diario(fecha, *, llm_model=None, llm_prompt_version=None,
                 ELSE en.entity_type END AS entity_type, en.entity FROM entities en
             JOIN entry_entities ee ON ee.entity_id=en.id
             JOIN diary_entries d ON d.id=ee.entry_id
-            WHERE diary_date(COALESCE(d.recorded_at,d.received_at,d.created_at))=?
+            WHERE COALESCE(d.entry_date, diary_date(COALESCE(d.recorded_at,d.received_at,d.created_at)))=?
             AND d.status='completed' ORDER BY en.entity
         """, (fecha,)).fetchall()
         emotions = [r[0] for r in conn.execute("""
             SELECT DISTINCT e.emotion FROM emotions e
             JOIN entry_emotions ee ON ee.emotion_id=e.id
             JOIN diary_entries d ON d.id=ee.entry_id
-            WHERE diary_date(COALESCE(d.recorded_at,d.received_at,d.created_at))=?
+            WHERE COALESCE(d.entry_date, diary_date(COALESCE(d.recorded_at,d.received_at,d.created_at)))=?
             AND d.status='completed' ORDER BY e.emotion
         """, (fecha,))]
         cached = conn.execute("SELECT * FROM daily_reports WHERE report_date=?", (fecha,)).fetchone()
@@ -354,23 +442,34 @@ def obtener_dias_con_entradas_del_mes(year, month):
     prefix = f"{year:04d}-{month:02d}"
     with conectar() as conn:
         return [r[0] for r in conn.execute("""
-            SELECT DISTINCT diary_date(COALESCE(recorded_at,received_at,created_at)) AS day
-            FROM diary_entries WHERE substr(diary_date(COALESCE(recorded_at,received_at,created_at)),1,7)=?
+            SELECT DISTINCT COALESCE(entry_date, diary_date(COALESCE(recorded_at,received_at,created_at))) AS day
+            FROM diary_entries WHERE substr(COALESCE(entry_date, diary_date(COALESCE(recorded_at,received_at,created_at))),1,7)=?
             ORDER BY day
         """, (prefix,))]
 
 
-def borrar_entrada(entry_id):
+def borrar_entrada(entry_id, *, expected_hash=None):
     with conectar() as conn:
-        row = conn.execute("SELECT audio_path FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT * FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
         if row is None:
             return None
+        if row["processing"]:
+            raise ValueError("La entrada se está procesando. Espera a que termine para borrarla.")
+        if expected_hash is not None and row["content_hash"] != expected_hash:
+            raise ValueError("La entrada ha cambiado. Vuelve a abrir la confirmación.")
+        if row["telegram_chat_id"] is not None:
+            conn.execute("INSERT OR IGNORE INTO deleted_telegram_messages VALUES(?,?)", (row["telegram_chat_id"], row["telegram_message_id"]))
+        if row["web_request_id"]:
+            conn.execute("INSERT OR IGNORE INTO deleted_web_requests VALUES(?)", (row["web_request_id"],))
         conn.execute("DELETE FROM entry_entities WHERE entry_id=?", (entry_id,))
         conn.execute("DELETE FROM entry_emotions WHERE entry_id=?", (entry_id,))
         conn.execute("DELETE FROM diary_entries WHERE id=?", (entry_id,))
         conn.execute("DELETE FROM entities WHERE id NOT IN (SELECT entity_id FROM entry_entities) AND id NOT IN (SELECT entity_id FROM people)")
         conn.execute("DELETE FROM emotions WHERE id NOT IN (SELECT emotion_id FROM entry_emotions)")
         conn.execute("DELETE FROM daily_reports")
+        if row["audio_path"] and not conn.execute("SELECT 1 FROM diary_entries WHERE audio_path=?", (row["audio_path"],)).fetchone():
+            conn.execute("INSERT OR IGNORE INTO audio_deletions VALUES(?)", (row["audio_path"],))
     return {"audio_path": row["audio_path"]}
 
 
@@ -425,7 +524,7 @@ def corregir_transcripcion(entry_id, text, expected_hash):
         if row is None:
             raise ValueError("La entrada ya no existe")
         current_hash = hashlib.sha256(row["transcription"].encode()).hexdigest()
-        if current_hash != expected_hash or row["status"] not in ("completed", "failed", "empty"):
+        if current_hash != expected_hash or row["processing"] or row["status"] not in ("completed", "failed", "empty"):
             raise ValueError("La entrada ha cambiado")
         conn.execute("""
             UPDATE diary_entries SET original_transcription=COALESCE(original_transcription, transcription),

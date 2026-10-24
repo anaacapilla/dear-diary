@@ -62,9 +62,9 @@ def entries(start, end, query="", *, person_id=None):
     """Inclusive local dates. Text matching is literal, case-insensitive Unicode."""
     with read_connection() as conn:
         rows = conn.execute("""
-            SELECT *, diary_date(COALESCE(recorded_at,received_at,created_at)) AS day
+            SELECT *, COALESCE(entry_date, diary_date(COALESCE(recorded_at,received_at,created_at))) AS day
             FROM diary_entries
-            WHERE diary_date(COALESCE(recorded_at,received_at,created_at)) BETWEEN ? AND ?
+            WHERE COALESCE(entry_date, diary_date(COALESCE(recorded_at,received_at,created_at))) BETWEEN ? AND ?
             AND (? IS NULL OR EXISTS (
                 SELECT 1 FROM person_mentions pm
                 WHERE pm.entry_id=diary_entries.id AND pm.person_id=?))

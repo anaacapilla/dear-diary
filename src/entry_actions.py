@@ -51,7 +51,8 @@ async def handle_callback(update, context, *, enqueue):
     if entry is None:
         await answer(query, "Esta entrada ya no existe.", alert=True)
         return
-    if (entry.get("telegram_chat_id") != TELEGRAM_USER_ID
+    web_entry = entry.get("source") == "web" and entry.get("telegram_chat_id") is None
+    if ((entry.get("telegram_chat_id") != TELEGRAM_USER_ID and not web_entry)
             or entry.get("telegram_progress_message_id") != query.message.message_id):
         await answer(query, "Esta vista ha caducado. Usa el último mensaje de la entrada.", alert=True)
         return

@@ -187,11 +187,49 @@ y la gestión de las entradas se realizan desde la web.
 
 ## 🌸 Explorar la web
 
+### Entradas de otros días
+
+La **fecha del diario** es independiente de cuándo se crea o se envía una entrada.
+El calendario, el buscador, las estadísticas y **Tu año en píxeles** usan ese día.
+Las fechas de creación, recepción y envío se conservan en los datos de procesamiento.
+Las entradas antiguas mantienen el día que ya tenían al actualizar; se crea una copia
+previa de SQLite antes de migrar.
+
+En **Telegram**, antes de enviar el audio, escribe:
+
+```text
+fecha 2026-10-20
+```
+
+También se admite `fecha 20/10/2026`. El bot confirma el día y lo aplica **solo al
+siguiente audio aceptado**; después vuelve a usar el día del envío en Europe/Madrid.
+La selección se conserva si el bot se reinicia. Un audio rechazado por tamaño o
+duración no la consume. `fecha hoy` o `fecha cancelar` cancela la selección.
+Se permiten fechas desde 1900 hasta hoy, sin fechas futuras.
+
+En la **web**, elige un día en el calendario de **Entradas** y pulsa el botón rosa
+**＋ Añadir entrada**. Escribe el texto y pulsa **Guardar entrada** o cancela.
+La entrada se guarda en ese día y el bot prepara el análisis cuando esté en marcha;
+no necesitas enviar un mensaje de Telegram. Puedes seguir viendo el texto mientras
+está pendiente y usar **Reintentar análisis** desde la web si falla.
+Al empezar a procesarla, el bot te avisa en Telegram indicando el día del diario y
+que procede de la web. El mismo mensaje se actualiza con el progreso y el resultado;
+los audios de Telegram también indican su día y procedencia. Si reinicias el bot,
+se reutiliza el mensaje de progreso guardado. Un fallo al avisar no impide el análisis.
+
+**Borrar entrada** está disponible en el detalle, también desde las búsquedas.
+Pide confirmación y borra la entrada, sus asociaciones y el audio local. Las fichas
+de **Mis personas** se conservan. Una entrada en cola se puede borrar; si ya se está
+procesando, espera a que termine. Si el sistema bloquea el archivo de audio, su
+limpieza queda registrada para reintentarse en el mantenimiento. Las copias previas
+caducan según su retención habitual; el mensaje original de Telegram no se elimina.
+
 ### Entradas
 
 Navega por el calendario con las **flechas** o los selectores de **mes y año**.
 Los días con entradas están marcados: pulsa uno para ver lo almacenado.
-Las fechas corresponden al envío del audio, no necesariamente al día de lo que cuentas.
+Las fechas corresponden al día del diario: por defecto, el día del envío del audio,
+o el día que elegiste al crear una entrada retrospectiva.
 
 En cada entrada puedes consultar la transcripción, el resumen, las emociones,
 las personas, los lugares y los acontecimientos detectados.
@@ -199,8 +237,8 @@ las personas, los lugares y los acontecimientos detectados.
 **Editar entrada** permite corregir la transcripción completa y guardar o cancelar.
 El original se conserva y el análisis anterior se invalida. El bot recoge los cambios
 cada cinco segundos para regenerarlo; si está apagado, retomará las correcciones de
-entradas Telegram al arrancar. Las entradas antiguas sin identidad de Telegram
-requieren gestión local. No se pueden editar entradas pendientes o en procesamiento.
+entradas al arrancar, incluidas las creadas desde la web y las antiguas sin identidad
+de Telegram que tengan texto. No se pueden editar entradas pendientes o en procesamiento.
 
 ### Buscador
 

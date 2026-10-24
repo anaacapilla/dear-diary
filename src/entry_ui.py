@@ -15,6 +15,15 @@ from src.config import DIARY_TZ, TELEGRAM_USER_ID
 logger = logging.getLogger(__name__)
 
 
+def entry_context(entry):
+    day = entry.get("entry_date") or database._obtener_fecha_desde_iso(
+        entry.get("recorded_at") or entry.get("received_at") or entry.get("created_at"))
+    origin = "la web" if entry.get("source") == "web" else "Telegram"
+    if not day:
+        return ""
+    return f"📅 Entrada del día {datetime.fromisoformat(day):%d/%m/%Y} · desde {origin}"
+
+
 def button(label, action, entry_id):
     return InlineKeyboardButton(label, callback_data=f"dd:{action}:{entry_id}")
 
@@ -41,6 +50,8 @@ def brief_card(entry):
         dt = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
         dt = dt.replace(tzinfo=DIARY_TZ) if dt.tzinfo is None else dt.astimezone(DIARY_TZ)
         label = " · " + dt.strftime("%d/%m · %H:%M")
+    if entry.get("entry_date"):
+        label = " · " + datetime.fromisoformat(entry["entry_date"]).strftime("%d/%m/%Y")
     summary = (entry.get("summary") or "Sin resumen disponible.").strip()
     if len(summary) > 450:
         summary = summary[:447].rstrip() + "..."
@@ -49,22 +60,30 @@ def brief_card(entry):
 
 
 class ProgressMessage:
-    def __init__(self, bot, entry_id, chat_id, source_id=None, message_id=None, origin=None):
+    def __init__(self, bot, entry_id, chat_id, source_id=None, message_id=None, origin=None, heading=""):
         self.bot, self.entry_id, self.chat_id = bot, entry_id, chat_id
         self.source_id, self.origin = source_id, origin
         self.message_id = message_id if isinstance(message_id, int) else None
         self._lock = asyncio.Lock()
+        self.heading = heading
 
     @classmethod
     def from_entry(cls, entry, bot, origin=None):
+        if entry.get("source") == "legacy" and entry.get("telegram_chat_id") is None and entry.get("transcription"):
+            return WebProgress(bot, entry["id"], None)
+        if entry.get("source") == "web":
+            return cls(bot, entry["id"], TELEGRAM_USER_ID,
+                       message_id=entry.get("telegram_progress_message_id"), heading=entry_context(entry))
         return cls(
             bot, entry["id"],
             entry.get("telegram_chat_id") or getattr(origin, "chat_id", None) or TELEGRAM_USER_ID,
             entry.get("telegram_message_id") or getattr(origin, "message_id", None),
-            entry.get("telegram_progress_message_id"), origin,
+            entry.get("telegram_progress_message_id"), origin, heading=entry_context(entry),
         )
 
     async def show(self, text, markup=None):
+        if self.heading:
+            text = self.heading + "\n\n" + text
         async with self._lock:
             if self.message_id is not None and self.bot is not None:
                 try:
@@ -127,3 +146,10 @@ class ProgressMessage:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
+
+
+class WebProgress(ProgressMessage):
+    """Old entries without a known channel retain silent processing."""
+
+    async def show(self, text, markup=None):
+        return True

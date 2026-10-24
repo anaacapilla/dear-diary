@@ -74,6 +74,7 @@ def crear_backup(now=None, force=False):
 
 def mantenimiento(now=None):
     now = now or datetime.now(timezone.utc)
+    limpiar_audios_borrados()
     removed = purgar_audios(now)
     crear_backup(now)
     cutoff = (now - timedelta(days=BACKUP_RETENTION_DAYS)).timestamp()
@@ -86,3 +87,26 @@ def mantenimiento(now=None):
                     if not path.is_symlink() and path.stat().st_mtime <= cutoff:
                         path.unlink()
     logger.info("Mantenimiento completado: audios eliminados=%d", removed)
+
+
+def limpiar_audios_borrados():
+    """Retry file deletion after the diary transaction, including after a restart."""
+    with database.conectar() as conn:
+        paths = [r[0] for r in conn.execute("SELECT path FROM audio_deletions")]
+    failures = 0
+    for path in paths:
+        try:
+            with database.conectar() as conn:
+                # Legacy diaries may share a file between entries.
+                if conn.execute("SELECT 1 FROM diary_entries WHERE audio_path=?", (path,)).fetchone():
+                    continue
+            resolved = audio_seguro(path)
+            if resolved:
+                resolved.unlink(missing_ok=True)
+                resolved.with_suffix(resolved.suffix + ".part").unlink(missing_ok=True)
+            with database.conectar() as conn:
+                conn.execute("DELETE FROM audio_deletions WHERE path=?", (path,))
+        except (OSError, ValueError):
+            failures += 1
+            logger.warning("Limpieza de audio borrado pendiente")
+    return failures

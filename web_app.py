@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import sqlite3
+import uuid
 from collections import Counter
 from datetime import date, datetime
 
@@ -33,7 +34,7 @@ def change_month(offset):
 def edit_entry(item):
     entry_id = item["id"]
     key = "edit_" + entry_id
-    if item["status"] not in ("completed", "failed", "empty"):
+    if item.get("processing") or item["status"] not in ("completed", "failed", "empty"):
         st.caption("Podrás editar la transcripción cuando termine el procesamiento.")
         return
     if st.button("Editar entrada", key="open_" + entry_id):
@@ -63,8 +64,81 @@ def edit_entry(item):
         st.rerun()
 
 
+def add_entry(selected, today):
+    if st.button("＋ Añadir entrada", type="primary", disabled=selected > today, key="add_entry"):
+        st.session_state["new_entry_day"] = selected
+        st.session_state["new_entry_request"] = str(uuid.uuid4())
+    if "new_entry_day" not in st.session_state:
+        return
+    day = st.session_state["new_entry_day"]
+    st.subheader(f"Nueva entrada · {day:%d/%m/%Y}")
+    with st.form("new_entry_form"):
+        text = st.text_area("Escribe tu entrada", height=220, max_chars=12000,
+                            key="new_text_" + st.session_state["new_entry_request"])
+        save = st.form_submit_button("Guardar entrada", type="primary")
+        cancel = st.form_submit_button("Cancelar nueva entrada")
+    if save:
+        from src.web_entries import create_entry
+        try:
+            create_entry(day, text, st.session_state["new_entry_request"])
+        except ValueError as error:
+            st.error(str(error))
+            return
+        except sqlite3.Error as error:
+            logging.getLogger(__name__).error(
+                "Creación de entrada fallida: tipo=%s codigo=%s",
+                type(error).__name__, getattr(error, "sqlite_errorname", "sin_codigo"),
+            )
+            st.error("No se pudo guardar. Tu texto sigue en el formulario; vuelve a intentarlo.")
+            return
+        st.session_state["edit_notice"] = f"Entrada del {day:%d/%m/%Y} guardada. El bot preparará su análisis cuando esté en marcha."
+    if save or cancel:
+        st.session_state.pop("new_entry_day", None)
+        st.session_state.pop("new_entry_request", None)
+        st.rerun()
+
+
+def entry_actions(item):
+    from src.web_entries import delete_entry, retry_entry
+    entry_id = item["id"]
+    if item["status"] == "failed" and not item.get("processing"):
+        if st.button("Reintentar análisis", key="retry_web_" + entry_id):
+            try:
+                retry_entry(entry_id)
+            except (ValueError, sqlite3.Error):
+                st.error("No se pudo reintentar. Actualiza los datos y vuelve a intentarlo.")
+            else:
+                st.session_state["edit_notice"] = "Entrada pendiente de reintento. El bot la retomará cuando esté en marcha."
+                st.rerun()
+    key = "delete_" + entry_id
+    if st.button("Borrar entrada", key="open_delete_" + entry_id, disabled=bool(item.get("processing"))):
+        st.session_state[key] = item["content_hash"]
+    if item.get("processing"):
+        st.caption("Espera a que termine el procesamiento para borrar esta entrada.")
+        return
+    if key not in st.session_state:
+        return
+    st.warning("Se borrarán definitivamente esta entrada y su audio. Las copias anteriores seguirán su periodo de conservación.")
+    with st.form("confirm_delete_" + entry_id):
+        confirm = st.form_submit_button("Sí, borrar entrada", type="primary")
+        cancel = st.form_submit_button("Cancelar borrado")
+    if cancel:
+        st.session_state.pop(key, None)
+        st.rerun()
+    if confirm:
+        try:
+            cleaned = delete_entry(entry_id, st.session_state[key])
+        except (ValueError, sqlite3.Error) as error:
+            st.error(str(error) if isinstance(error, ValueError) else "No se pudo borrar. Vuelve a intentarlo.")
+            return
+        st.session_state.pop(key, None)
+        st.session_state["edit_notice"] = "Entrada borrada." if cleaned else "Entrada borrada. La limpieza del audio queda pendiente del mantenimiento."
+        st.rerun()
+
+
 def show_entry(row, editable=False):
-    with st.expander(f"{row['day']} · {STATUS.get(row['status'], row['status'])} · {row['id'][:8]}", expanded=True):
+    state = "Procesando" if row.get("processing") else STATUS.get(row["status"], row["status"])
+    with st.expander(f"{row['day']} · {state} · {row['id'][:8]}", expanded=True):
         item = details(row["id"])
         if item is None:
             st.info("Esta entrada ya no está disponible.")
@@ -86,13 +160,16 @@ def show_entry(row, editable=False):
         edit_entry_people(item)
         if editable:
             edit_entry(item)
+        entry_actions(item)
         if item.get("original_transcription") and item.get("transcription_edited_at"):
             with st.expander("Transcripción original"):
                 st.text(item["original_transcription"])
         with st.expander("Datos de procesamiento"):
             st.caption("Estado y tiempos de preparación de esta entrada")
-            st.write("**Estado:** " + STATUS.get(item["status"], "Desconocido"))
-            for field, label in (("received_at", "Recibida"), ("recorded_at", "Enviada")):
+            st.write("**Estado:** " + ("Procesando" if item.get("processing") else STATUS.get(item["status"], "Desconocido")))
+            st.write("**Día del diario:** " + (item.get("entry_date") or row["day"]))
+            st.caption("Origen: " + {"telegram": "Telegram", "web": "Web", "legacy": "Entrada anterior"}.get(item.get("source"), "Entrada anterior"))
+            for field, label in (("created_at", "Creada"), ("received_at", "Recibida"), ("recorded_at", "Enviada")):
                 value = item.get(field)
                 if value:
                     timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -112,7 +189,7 @@ def show_entry(row, editable=False):
             if item.get("error_code"):
                 stage = {"download": "descarga del audio", "transcription": "transcripción",
                          "analysis": "análisis", "storage": "guardado"}.get(item["error_code"], "procesamiento")
-                st.warning(f"No se pudo completar la etapa de {stage}. Puedes reintentar desde Telegram.")
+                st.warning(f"No se pudo completar la etapa de {stage}. Puedes reintentar desde esta página.")
 
 
 def show_results(rows, prefix):
@@ -153,6 +230,8 @@ def main():
             st.session_state.pop(key, None)
     st.sidebar.caption("Telegram recibe tus audios. Aquí puedes revisar tu diario.")
     st.title(section)
+    if "edit_notice" in st.session_state:
+        st.success(st.session_state.pop("edit_notice"))
     if section == "Mis personas":
         from src.people_ui import show_people
         show_people()
@@ -165,8 +244,6 @@ def main():
         from src.statistics_ui import show_statistics
         show_statistics(today, show_results)
         return
-    if "edit_notice" in st.session_state:
-        st.success(st.session_state.pop("edit_notice"))
     if section == "Entradas":
         left, right = st.columns(2)
         st.session_state.setdefault("calendar_year", today.year)
@@ -181,7 +258,7 @@ def main():
                          disabled=(year, month) == (2100, 12), use_container_width=True)
         rows = entries(date(year, month, 1), date(year, month, calendar.monthrange(year, month)[1]))
         counts = Counter(row["day"] for row in rows)
-        st.caption("● indica un día con entradas. Las fechas corresponden al envío del audio.")
+        st.caption("● indica un día con entradas. Las fechas corresponden al día del diario que has elegido.")
         for column, label in zip(st.columns(7), ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]):
             column.write(label)
         for week in calendar.Calendar(firstweekday=0).monthdayscalendar(year, month):
@@ -195,6 +272,7 @@ def main():
         if (selected.year, selected.month) != (year, month):
             selected = date(year, month, 1)
         st.subheader(selected.strftime("%d/%m/%Y"))
+        add_entry(selected, today)
         show_results([r for r in rows if r["day"] == selected.isoformat()], "entries")
     else:
         left, right = st.columns(2)

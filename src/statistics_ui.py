@@ -49,7 +49,7 @@ def pixels_html(year, rows, today, mode):
 
 def show_statistics(today, show_results):
     with read_connection() as conn:
-        first = conn.execute('SELECT MIN(diary_date(COALESCE(recorded_at,received_at,created_at))) FROM diary_entries').fetchone()[0]
+        first = conn.execute('SELECT MIN(COALESCE(entry_date, diary_date(COALESCE(recorded_at,received_at,created_at)))) FROM diary_entries').fetchone()[0]
     period = st.selectbox('Periodo', ['Este mes', 'Este año', 'Todo', 'Personalizado'], key='stats_period')
     start, end = (today.replace(day=1), today)
     if period == 'Este año':

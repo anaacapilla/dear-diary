@@ -119,7 +119,7 @@ def show_people():
 def edit_entry_people(item):
     entry_id = item["id"]
     key = "entry_people_" + entry_id
-    if item["status"] not in ("completed", "failed", "empty"):
+    if item.get("processing") or item["status"] not in ("completed", "failed", "empty"):
         return
     if st.button("Editar personas", key="open_people_" + entry_id):
         st.session_state[key] = people.entry_people(entry_id)

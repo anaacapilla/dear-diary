@@ -279,11 +279,11 @@ def entry_people(entry_id, conn=None):
     if conn is None:
         with database.conectar() as connection:
             return entry_people(entry_id, connection)
-    entry = conn.execute("SELECT transcription, status FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
+    entry = conn.execute("SELECT transcription, status, processing FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
     if entry is None:
         raise ValueError("La entrada ya no existe.")
     mentions = [dict(r) for r in conn.execute("SELECT mention, person_id FROM person_mentions WHERE entry_id=? ORDER BY mention", (entry_id,))]
-    return {"transcription": entry["transcription"], "status": entry["status"], "mentions": mentions}
+    return {"transcription": entry["transcription"], "status": entry["status"], "processing": entry["processing"], "mentions": mentions}
 
 
 def correct_entry_people(entry_id, assignments, expected):
@@ -291,7 +291,7 @@ def correct_entry_people(entry_id, assignments, expected):
     with database.conectar() as conn:
         conn.execute("BEGIN IMMEDIATE")
         state = entry_people(entry_id, conn)
-        if snapshot(state) != expected or state["status"] not in ("completed", "failed", "empty"):
+        if snapshot(state) != expected or state["processing"] or state["status"] not in ("completed", "failed", "empty"):
             raise ValueError("La entrada ha cambiado o se está procesando. Vuelve a abrir la edición de personas.")
         known = {m["mention"] for m in state["mentions"]}
         if not known.issubset(assignments):

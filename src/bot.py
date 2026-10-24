@@ -1,8 +1,10 @@
 """Private Telegram diary. Importing the module never loads models or opens a DB."""
 import asyncio
 import logging
+import re
 import uuid
 from contextlib import suppress
+from datetime import datetime
 
 from telegram import Update
 from telegram.error import TelegramError
@@ -59,9 +61,12 @@ def trabajo_entrada(entry, telegram_bot, fallback_message=None, *, progress=None
 
     async def run():
         async with _processing_lock:
-            current = await asyncio.to_thread(database.obtener_entrada, entry_id)
+            current = await asyncio.to_thread(database.reclamar_entrada, entry_id)
             if current is not None:
-                await procesar_entrada(current, telegram_bot, progress)
+                try:
+                    await procesar_entrada(current, telegram_bot, progress)
+                finally:
+                    await asyncio.to_thread(database.liberar_entrada, entry_id)
     return run
 
 
@@ -93,8 +98,10 @@ async def recuperar_cola(application):
     recovered = 0
     for entry in await asyncio.to_thread(database.entradas_pendientes):
         if (entry["status"] in ("pending", "transcribed")
-                and entry["telegram_chat_id"] == TELEGRAM_USER_ID
-                and entry["telegram_message_id"] is not None):
+                and ((entry["telegram_chat_id"] == TELEGRAM_USER_ID
+                      and entry["telegram_message_id"] is not None)
+                     or (entry["source"] in ("web", "legacy") and entry["transcription"]
+                         and entry["telegram_chat_id"] is None))):
             recovered += queue.enqueue(entry["id"], trabajo_entrada(entry, application.bot))
     return recovered
 
@@ -115,6 +122,7 @@ async def procesar_entrada(entry, bot, message, extractor=None):
     stage = "download"
     text = entry["transcription"]
     try:
+        await progress.show("⏳ Procesando tu entrada…" if text else "⏳ Procesando tu audio…")
         if not text:
             await progress.show("📥 Descargando tu audio…")
             ruta = audio_seguro(entry["audio_path"])
@@ -166,6 +174,9 @@ async def recibir_audio(update, context):
         return
     message = update.message
     audio = message.voice or message.audio
+    if await asyncio.to_thread(database.entrada_telegram_borrada, message.chat_id, message.message_id):
+        await enviar_texto(message, "Esta entrada se borró desde la web. Envía un audio nuevo si quieres crear otra.")
+        return
     if not audio:
         return
     duration = audio.duration
@@ -191,6 +202,9 @@ async def recibir_audio(update, context):
             telegram_file_id=audio.file_id, status="pending", audio_seconds=duration,
         )
         existing = await asyncio.to_thread(database.obtener_entrada, entry_id)
+    if existing is None:
+        # The user may have deleted the waiting entry from the web meanwhile.
+        return
     await encolar_entrada(existing, context, message)
 
 
@@ -199,8 +213,28 @@ async def entry_callback(update, context):
 
 
 async def orientar_usuario(update, context):
-    if usuario_autorizado(update):
-        await enviar_texto(update.message, MENSAJE_BIENVENIDA)
+    if not usuario_autorizado(update):
+        return
+    message = update.message
+    text = getattr(message, "text", "") or ""
+    match = re.fullmatch(r"/?fecha(?:\s*:\s*|\s+)(.+)", text.strip(), re.IGNORECASE)
+    if not match:
+        await enviar_texto(message, MENSAJE_BIENVENIDA)
+        return
+    value = match[1].strip().casefold()
+    try:
+        day = None if value in ("hoy", "cancelar") else database.validar_fecha_entrada(
+            datetime.strptime(value, "%d/%m/%Y").date() if re.fullmatch(r"\d{2}/\d{2}/\d{4}", value) else value)
+        changed = await asyncio.to_thread(database.indicar_fecha_telegram, message.chat_id, message.message_id, day)
+    except ValueError:
+        await enviar_texto(message, "Indica una fecha válida, no futura: fecha 2026-10-20 o fecha 20/10/2026. Usa fecha hoy para cancelar la selección.")
+        return
+    if not changed:
+        await enviar_texto(message, "Esta indicación ya se atendió. Envía un nuevo mensaje de fecha si quieres cambiarla.")
+    elif day:
+        await enviar_texto(message, f"📅 El siguiente audio se guardará en {datetime.fromisoformat(day):%d/%m/%Y}. Después volveré a usar la fecha del envío. Para cancelar: fecha hoy.")
+    else:
+        await enviar_texto(message, "📅 Fecha especial cancelada. Usaré la fecha del envío para el siguiente audio.")
 
 
 async def maintenance_loop(application):
@@ -225,6 +259,7 @@ async def web_edits_loop(application):
 
 async def post_init(application):
     await asyncio.to_thread(database.inicializar_db)
+    await asyncio.to_thread(database.recuperar_procesamiento)
     AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     await asyncio.to_thread(mantenimiento)
     await application.bot.delete_my_commands()
