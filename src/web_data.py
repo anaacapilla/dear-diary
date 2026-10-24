@@ -5,6 +5,24 @@ from contextlib import contextmanager
 from src import database
 
 
+class DiarySchemaError(ValueError):
+    """A schema mismatch that requires an actionable message in the web UI."""
+
+
+def schema_error(version):
+    if version > database.SCHEMA_VERSION:
+        return DiarySchemaError(
+            "El diario usa una versión más reciente que la cargada por esta web "
+            f"(base: {version}; web: {database.SCHEMA_VERSION}). "
+            "Detén Streamlit con Ctrl+C y vuelve a iniciarlo desde la misma carpeta "
+            "del proyecto que el bot. Refrescar el navegador no reinicia Streamlit."
+        )
+    return DiarySchemaError(
+        "El esquema del diario necesita actualizarse. Reinicia Streamlit desde "
+        "la misma carpeta del proyecto que el bot para completar la actualización."
+    )
+
+
 def prepare_database():
     """Migrate an existing diary without silently creating one at a wrong path."""
     uri = database.DB_PATH.resolve().as_uri() + "?mode=ro"
@@ -17,7 +35,7 @@ def prepare_database():
         if not exists:
             raise ValueError("La base de datos no contiene un diario.")
         if version > database.SCHEMA_VERSION:
-            raise ValueError("La base de datos pertenece a una versión más reciente.")
+            raise schema_error(version)
     finally:
         conn.close()
     if version < database.SCHEMA_VERSION:
@@ -34,7 +52,7 @@ def read_connection():
     try:
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version != database.SCHEMA_VERSION:
-            raise ValueError("Recarga la web para actualizar el esquema de la base de datos.")
+            raise schema_error(version)
         yield conn
     finally:
         conn.close()
