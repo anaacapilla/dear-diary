@@ -2,6 +2,7 @@
 import calendar
 import hashlib
 import json
+import logging
 import sqlite3
 from collections import Counter
 from datetime import date, datetime
@@ -10,7 +11,7 @@ import streamlit as st
 
 from src.config import DIARY_TZ
 from src import database
-from src.web_data import details, entries
+from src.web_data import DiarySchemaError, details, entries
 
 st.set_page_config(page_title="Dear Diary", page_icon="📖", layout="wide")
 
@@ -141,8 +142,8 @@ def main():
     button[kind="secondary"]:hover { border-color: #A84970; background: #F7E0ED; color: #703C57; }
     .calendar-heading { text-align: center; margin: 0; line-height: 2.5rem; font-size: 1.45rem; font-weight: 650; color: #85425F; }
     </style>""", unsafe_allow_html=True)
-    section = st.session_state.setdefault("section", "Entradas")
-    for label in ("Entradas", "Buscador", "Estadísticas", "Mis personas"):
+    section = st.session_state.setdefault("section", "Tu año en píxeles" if "stats_day" in st.query_params else "Entradas")
+    for label in ("Entradas", "Buscador", "Estadísticas", "Tu año en píxeles", "Mis personas"):
         if st.sidebar.button(label, key="nav_" + label, use_container_width=True,
                              type="primary" if section == label else "tertiary"):
             st.session_state["section"] = label
@@ -155,6 +156,14 @@ def main():
     if section == "Mis personas":
         from src.people_ui import show_people
         show_people()
+        return
+    if section == "Tu año en píxeles":
+        from src.statistics_ui import show_year_pixels
+        show_year_pixels(today, show_results)
+        return
+    if section == "Estadísticas":
+        from src.statistics_ui import show_statistics
+        show_statistics(today, show_results)
         return
     if "edit_notice" in st.session_state:
         st.success(st.session_state.pop("edit_notice"))
@@ -199,31 +208,19 @@ def main():
             query = st.text_input("Buscar en el diario", placeholder="Por ejemplo: Marta, oficina, paseo…")
             if query.strip():
                 show_results(entries(start, end, query), "search")
-        else:
-            rows = entries(start, end)
-            a, b, c = st.columns(3)
-            a.metric("Entradas", len(rows))
-            b.metric("Días con entradas", len({r["day"] for r in rows}))
-            c.metric("Analizadas", sum(r["status"] == "completed" for r in rows))
-            if rows:
-                st.subheader("Entradas por día")
-                counts = Counter(r["day"] for r in rows)
-                st.bar_chart(dict(sorted(counts.items())))
-                st.subheader("Estado del procesamiento")
-                st.dataframe([{"Estado": STATUS.get(k, k), "Entradas": v}
-                              for k, v in Counter(r["status"] for r in rows).items()], hide_index=True)
-                st.subheader("Sentimiento de las entradas analizadas")
-                st.dataframe([{"Sentimiento": k, "Entradas": v} for k, v in Counter(
-                    r["sentiment"] for r in rows if r["status"] == "completed" and r["sentiment"]
-                ).items()], hide_index=True)
-                st.caption("Estas cifras describen entradas registradas, no acontecimientos únicos ni una evaluación clínica.")
-            else:
-                st.info("No hay entradas en este periodo.")
+
 
 
 try:
     from src.web_data import prepare_database
     prepare_database()
     main()
-except (sqlite3.Error, ValueError):
+except DiarySchemaError as error:
+    st.error(str(error))
+except (sqlite3.Error, ValueError) as error:
+    # Log only types/codes: exception bodies may contain personal diary data.
+    logging.getLogger(__name__).error(
+        "Diario web no disponible: tipo=%s codigo=%s",
+        type(error).__name__, getattr(error, "sqlite_errorname", "sin_codigo"),
+    )
     st.error("No se puede abrir o actualizar el diario. Comprueba DATABASE_PATH y los permisos del archivo. Si todavía no existe un diario, arranca el bot una vez para crearlo.")

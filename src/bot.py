@@ -188,7 +188,7 @@ async def recibir_audio(update, context):
             database.guardar_entrada, "", received_at=database.ahora(),
             recorded_at=message.date.isoformat(), audio_path=str(path),
             telegram_chat_id=message.chat_id, telegram_message_id=message.message_id,
-            telegram_file_id=audio.file_id, status="pending",
+            telegram_file_id=audio.file_id, status="pending", audio_seconds=duration,
         )
         existing = await asyncio.to_thread(database.obtener_entrada, entry_id)
     await encolar_entrada(existing, context, message)

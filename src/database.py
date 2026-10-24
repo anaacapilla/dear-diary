@@ -9,7 +9,7 @@ from datetime import date, datetime
 from src.config import DATABASE_PATH, DIARY_TZ
 
 DB_PATH = DATABASE_PATH
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 8
 
 
 def ahora():
@@ -94,6 +94,7 @@ def inicializar_db():
             "transcription_edited_at": "TEXT",
             "transcription_seconds": "REAL",
             "analysis_seconds": "REAL",
+            "audio_seconds": "REAL",
         }
         for name, definition in additions.items():
             if name not in columns:
@@ -156,7 +157,7 @@ def guardar_entrada(
     summary=None, sentiment=None, events=None, transcription_model=None,
     llm_model=None, llm_prompt_version=None, entities=None, emotions=None,
     telegram_chat_id=None, telegram_message_id=None, telegram_file_id=None,
-    status="completed",
+    status="completed", audio_seconds=None,
 ):
     if (telegram_chat_id is None) != (telegram_message_id is None):
         raise ValueError("Se necesitan tanto chat_id como message_id")
@@ -177,14 +178,14 @@ def guardar_entrada(
                 id, hash, created_at, received_at, recorded_at, audio_path,
                 transcription, summary, sentiment, events, transcription_model,
                 llm_model, llm_prompt_version, telegram_chat_id, telegram_message_id,
-                telegram_file_id, content_hash, status
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                telegram_file_id, content_hash, status, audio_seconds
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             entrada_id, identity_hash, ahora(), received_at, recorded_at, audio_path,
             transcription, summary, sentiment, json.dumps(events or [], ensure_ascii=False),
             transcription_model, llm_model, llm_prompt_version, telegram_chat_id,
             telegram_message_id, telegram_file_id,
-            hashlib.sha256(transcription.encode()).hexdigest(), status,
+            hashlib.sha256(transcription.encode()).hexdigest(), status, audio_seconds,
         ))
         _guardar_relaciones(conn, entrada_id, entities or [], emotions or [])
         conn.execute("DELETE FROM daily_reports")

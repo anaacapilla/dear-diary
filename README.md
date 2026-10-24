@@ -17,6 +17,25 @@ con su resumen, emociones, personas, lugares y acontecimientos.
 | Reintentar si ocurre un error | Corregir la transcripción de una entrada |
 | Recibir avisos de inicio y apagado del bot | Buscar por texto y fechas, y consultar estadísticas |
 
+## Estadísticas
+
+La página **Estadísticas** permite elegir este mes, este año, todo el histórico
+o un periodo personalizado. Muestra entradas, días activos, medias por día y por
+día activo, rachas, frecuencia y emociones habituales. Las rachas se calculan
+dentro del periodo elegido; la actual admite que todavía no hayas grabado hoy.
+
+**Tu año en píxeles** es un apartado del menú lateral, con los meses en columnas
+verticales y su propio selector de año y muestra el sentimiento
+mayoritario de los audios analizados de cada día, o la cantidad de entradas.
+Los empates llevan trama; los días pendientes de análisis y sin entradas se
+distinguen. Pasa el cursor para ver el reparto y pulsa un píxel para consultar
+las entradas del día.
+
+Los nuevos audios conservan su duración aunque después se elimine el archivo.
+**Recuperar duraciones antiguas** lee los archivos locales todavía disponibles.
+Las métricas de duración indican su cobertura y excluyen los datos desconocidos.
+Al actualizar, reinicia tanto Streamlit como el bot para cargar el nuevo esquema.
+
 ## Mis personas
 
 En la barra lateral de Streamlit, **Mis personas** permite mantener un registro
@@ -49,6 +68,13 @@ La selección se aplica a todas las apariciones de la misma expresión en esa en
 Al actualizar desde una versión anterior, Streamlit o el bot migran SQLite al
 arrancar. Se crea automáticamente una copia en la carpeta `backups` de la base de
 datos. La migración incorpora las menciones anteriores a **Por organizar**.
+
+Si actualizas el código con Streamlit abierto, detén su terminal con **Ctrl+C**
+y vuelve a ejecutar `uv run --group web streamlit run web_app.py` desde la carpeta
+del proyecto. Refrescar el navegador recarga la página, pero puede conservar módulos
+Python antiguos. Si el bot ya ha actualizado SQLite, la web mostrará instrucciones
+para reiniciarse cuando detecte una versión de esquema incompatible. Este reinicio
+no borra entradas y no requiere detener el bot.
 
 ## 🌱 Primeros pasos
 
