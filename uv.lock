@@ -438,7 +438,7 @@ notebooks = [
     { name = "pandas", specifier = ">=3.0.5" },
     { name = "transformers", specifier = ">=4.57.0" },
 ]
-web = [{ name = "streamlit", specifier = ">=1.45,<2" }]
+web = [{ name = "streamlit", specifier = ">=1.66,<2" }]
 
 [[package]]
 name = "debugpy"

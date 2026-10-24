@@ -17,6 +17,39 @@ con su resumen, emociones, personas, lugares y acontecimientos.
 | Reintentar si ocurre un error | Corregir la transcripción de una entrada |
 | Recibir avisos de inicio y apagado del bot | Buscar por texto y fechas, y consultar estadísticas |
 
+## Mis personas
+
+En la barra lateral de Streamlit, **Mis personas** permite mantener un registro
+editable con el nombre completo, alias, procedencia, residencia actual, relación,
+de qué conoces a cada persona y grupos. Añade filas al final de la tabla y pulsa
+**Guardar cambios**; **Descartar cambios** vuelve a cargar los datos guardados.
+Separa los alias con `;`. Los grupos se seleccionan entre los existentes y también
+puedes crear etiquetas; se unifican las diferencias de mayúsculas y espacios.
+Solo el nombre completo es obligatorio y debe ser único en el registro.
+Para retirar una ficha sin perder sus vínculos, marca **Archivada**.
+
+Los nombres y alias únicos se vinculan al procesar entradas nuevas, conservando
+las transcripciones y las menciones originales. Las coincidencias usan palabras
+completas, sin distinguir mayúsculas y espacios; no se adivinan variantes ni erratas.
+Los alias compartidos permanecen sin identificar. Archivar una persona detiene
+sus nuevas asociaciones y reserva sus alias para evitar atribuciones incorrectas.
+
+**Por organizar** recoge menciones existentes y nuevas que no tienen identidad.
+Puedes crear una ficha o añadir una mención como alias a una persona existente.
+Después, en **Propuestas del histórico**, pulsa **Buscar propuestas**, revisa las
+transcripciones, marca las asociaciones deseadas y pulsa **Aceptar seleccionadas**.
+Guardar un alias no aplica por sí solo esas propuestas ni regenera los análisis.
+Desde cada entrada, tanto en el calendario como en los resultados del buscador,
+**Editar personas** permite asignar o corregir la persona de cada mención y dejarla
+sin identificar. También puedes añadir una mención que aparezca en la transcripción
+y no se haya detectado. Estas correcciones afectan solo a esa entrada, se conservan
+al reanalizarla mientras siga apareciendo la mención y no crean alias globales.
+La selección se aplica a todas las apariciones de la misma expresión en esa entrada.
+
+Al actualizar desde una versión anterior, Streamlit o el bot migran SQLite al
+arrancar. Se crea automáticamente una copia en la carpeta `backups` de la base de
+datos. La migración incorpora las menciones anteriores a **Por organizar**.
+
 ## 🌱 Primeros pasos
 
 Necesitas **Python 3.12 o superior**, **uv** y **Ollama**.

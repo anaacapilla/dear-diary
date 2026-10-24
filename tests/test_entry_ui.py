@@ -239,7 +239,7 @@ def test_migration_from_v2_preserves_text_and_adds_ui_fields(tmp_path, monkeypat
     assert len(list((tmp_path / "backups").glob("migration-*.sqlite3"))) == 1
     with database.conectar() as c:
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert c.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert c.execute("PRAGMA user_version").fetchone()[0] == database.SCHEMA_VERSION
 
 
 def test_deleting_entry_cascades_to_edit_request(db, analysis):

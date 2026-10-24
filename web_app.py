@@ -81,6 +81,8 @@ def show_entry(row, editable=False):
                 st.text("• " + event)
         st.write("Transcripción")
         st.text(item["transcription"] or "Todavía no hay transcripción.")
+        from src.people_ui import edit_entry_people
+        edit_entry_people(item)
         if editable:
             edit_entry(item)
         if item.get("original_transcription") and item.get("transcription_edited_at"):
@@ -140,14 +142,20 @@ def main():
     .calendar-heading { text-align: center; margin: 0; line-height: 2.5rem; font-size: 1.45rem; font-weight: 650; color: #85425F; }
     </style>""", unsafe_allow_html=True)
     section = st.session_state.setdefault("section", "Entradas")
-    for label in ("Entradas", "Buscador", "Estadísticas"):
+    for label in ("Entradas", "Buscador", "Estadísticas", "Mis personas"):
         if st.sidebar.button(label, key="nav_" + label, use_container_width=True,
                              type="primary" if section == label else "tertiary"):
             st.session_state["section"] = label
             st.rerun()
-    st.sidebar.button("Actualizar datos")
+    if st.sidebar.button("Actualizar datos", help="Recarga los datos guardados y descarta los cambios sin guardar de Mis personas."):
+        for key in ("people_baseline", "people_editor", "people_proposals", "people_review"):
+            st.session_state.pop(key, None)
     st.sidebar.caption("Telegram recibe tus audios. Aquí puedes revisar tu diario.")
     st.title(section)
+    if section == "Mis personas":
+        from src.people_ui import show_people
+        show_people()
+        return
     if "edit_notice" in st.session_state:
         st.success(st.session_state.pop("edit_notice"))
     if section == "Entradas":
@@ -214,6 +222,8 @@ def main():
 
 
 try:
+    from src.web_data import prepare_database
+    prepare_database()
     main()
 except (sqlite3.Error, ValueError):
-    st.error("No se puede leer el diario. Comprueba DATABASE_PATH y arranca el bot para inicializar o actualizar la base de datos.")
+    st.error("No se puede abrir o actualizar el diario. Comprueba DATABASE_PATH y los permisos del archivo. Si todavía no existe un diario, arranca el bot una vez para crearlo.")
