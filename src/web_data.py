@@ -3,6 +3,7 @@ import sqlite3
 from contextlib import contextmanager
 
 from src import database
+from src import people
 
 
 class DiarySchemaError(ValueError):
@@ -59,7 +60,7 @@ def read_connection():
 
 
 def entries(start, end, query="", *, person_id=None):
-    """Inclusive local dates. Text matching is literal, case-insensitive Unicode."""
+    """Search text or a person's interchangeable names, without modifying history."""
     with read_connection() as conn:
         rows = conn.execute("""
             SELECT *, COALESCE(entry_date, diary_date(COALESCE(recorded_at,received_at,created_at))) AS day
@@ -70,18 +71,42 @@ def entries(start, end, query="", *, person_id=None):
                 WHERE pm.entry_id=diary_entries.id AND pm.person_id=?))
             ORDER BY COALESCE(recorded_at,received_at,created_at) DESC, id
         """, (start.isoformat(), end.isoformat(), person_id, person_id)).fetchall()
-        names = {}
-        for item in conn.execute("""SELECT DISTINCT pm.entry_id, e.entity
-                FROM person_mentions pm JOIN people p ON p.entity_id=pm.person_id
-                JOIN entities e ON e.id=p.entity_id
-                UNION SELECT DISTINCT pm.entry_id, a.alias
-                FROM person_mentions pm JOIN person_aliases a ON a.person_id=pm.person_id"""):
-            names.setdefault(item["entry_id"], []).append(item["entity"])
-    needle = query.strip().casefold()
-    return [dict(row) for row in rows if not needle or needle in " ".join(
-        [str(row[field] or "") for field in ("transcription", "summary", "events")]
-        + names.get(row["id"], [])
-    ).casefold()]
+        if not rows or not query.strip():
+            return [dict(row) for row in rows]
+        registry = people.list_people(conn)
+        query_key = people.alias_key(query)
+        identities = {p["entity_id"] for p in registry
+                      if query_key in {people.alias_key(name) for name in [p["name"], *p["aliases"]]}}
+        selected_ids = {row["id"] for row in rows}
+        saved, manual = {}, {}
+        for table, target in (("person_mentions", saved), ("person_overrides", manual)):
+            for item in conn.execute(f"SELECT entry_id, mention, person_id FROM {table}"):
+                if item["entry_id"] in selected_ids:
+                    target.setdefault(item["entry_id"], []).append(dict(item))
+        registry_names = {p["entity_id"]: [p["name"], *p["aliases"]] for p in registry}
+        index = people.alias_index(conn) if identities else {}
+    needle = people.alias_text(people.normalize(query))
+    results = []
+    for row in rows:
+        mentions = saved.get(row["id"], [])
+        if identities:
+            # Search can find an unconfirmed unique alias, but a saved/manual choice wins.
+            spans = [(*m, 0) for m in people.literal_spans(row["transcription"], index)]
+            for priority, decisions in ((1, mentions), (2, manual.get(row["id"], []))):
+                for decision in decisions:
+                    if priority == 1 and decision["person_id"] is None:
+                        continue
+                    spans.extend((*m, priority) for m in people.literal_spans(
+                        row["transcription"], {decision["mention"]: {decision["person_id"]}}))
+            found = {identity for _, identity in people.select_mentions(spans) if identity is not None}
+            matches = bool(identities & found)
+        else:
+            text = " ".join([str(row[field] or "") for field in ("transcription", "summary", "events")]
+                            + [name for m in mentions for name in registry_names.get(m["person_id"], [])])
+            matches = needle in people.alias_text(people.normalize(text))
+        if matches:
+            results.append(dict(row))
+    return results
 
 
 def details(entry_id):

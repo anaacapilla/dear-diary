@@ -7,7 +7,7 @@ import streamlit as st
 
 from src import people
 
-LABELS = {"name": "Nombre canónico (completo)", "aliases": "Alias (separados por ;)",
+LABELS = {"name": "Nombre canónico (completo)", "aliases": "Alias (separados por coma o ;)",
           "origin": "De dónde es", "residence": "Dónde vive", "relationship": "Relación",
           "known_from": "De qué la conozco", "groups": "Grupos", "archived": "Archivada"}
 
@@ -29,7 +29,7 @@ def show_people():
     baseline = st.session_state["people_baseline"]
     registry, organize, history = st.tabs(["Mis personas", "Por organizar", "Propuestas del histórico"])
     with registry:
-        st.caption("Añade filas al final de la tabla. Solo el nombre completo es obligatorio. Separa los alias con punto y coma. Archivar conserva los vínculos y los alias.")
+        st.caption("Añade filas al final de la tabla. Solo el nombre completo es obligatorio. Separa los alias con comas o punto y coma: mamá, mami, mi madre. Archivar conserva los vínculos y los alias.")
         query = st.text_input("Buscar personas", placeholder="Nombre, alias, relación, lugar o grupo")
         groups = sorted({g for p in baseline for g in p["groups"]})
         group = st.selectbox("Filtrar por grupo", ["Todos", *groups])
@@ -57,7 +57,7 @@ def show_people():
             try:
                 records = edited.where(edited.notna(), None).to_dict("records")
                 for row in records:
-                    row["aliases"] = [a.strip() for a in (row["aliases"] or "").split(";") if a.strip()]
+                    row["aliases"] = people.split_aliases(row["aliases"] or "")
                     row["groups"] = list(row["groups"] or [])
                 people.save_people(records, people.snapshot(baseline))
             except (ValueError, sqlite3.IntegrityError) as error:

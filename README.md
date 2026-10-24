@@ -42,14 +42,21 @@ En la barra lateral de Streamlit, **Mis personas** permite mantener un registro
 editable con el nombre completo, alias, procedencia, residencia actual, relación,
 de qué conoces a cada persona y grupos. Añade filas al final de la tabla y pulsa
 **Guardar cambios**; **Descartar cambios** vuelve a cargar los datos guardados.
-Separa los alias con `;`. Los grupos se seleccionan entre los existentes y también
+Separa los alias con comas o `;`, por ejemplo `mamá, mami, mi madre`.
+Las listas antiguas introducidas en una sola celda se separan al actualizar,
+con copia de seguridad previa. Los grupos se seleccionan entre los existentes y también
 puedes crear etiquetas; se unifican las diferencias de mayúsculas y espacios.
 Solo el nombre completo es obligatorio y debe ser único en el registro.
 Para retirar una ficha sin perder sus vínculos, marca **Archivada**.
 
 Los nombres y alias únicos se vinculan al procesar entradas nuevas, conservando
 las transcripciones y las menciones originales. Las coincidencias usan palabras
-completas, sin distinguir mayúsculas y espacios; no se adivinan variantes ni erratas.
+completas, sin distinguir mayúsculas, espacios ni tildes de las vocales: `mamá`
+y `mama` se reconocen igual, pero `ñ` sigue siendo distinta de `n`. Se admite la
+coma que puede introducir la transcripción en una expresión como `mi prima, Marta`.
+Si esa normalización produce un alias compartido, la mención requiere revisión.
+La detección de alias se guarda en cuanto termina la transcripción, incluso si
+después falla el análisis. No se adivinan apodos ni erratas no registradas.
 Los alias compartidos se dejan sin identificar salvo que haya una pista explícita
 y única en la misma expresión: por ejemplo, «mi prima Marta», «Marta, mi prima»,
 «Marta que vive en Valencia» o «Marta que es de Toledo». Para ello, guarda el alias
@@ -72,7 +79,14 @@ y no se haya detectado. Estas correcciones afectan solo a esa entrada, se conser
 al reanalizarla mientras siga apareciendo la mención y no crean alias globales.
 La selección se aplica a todas las apariciones de la misma expresión en esa entrada.
 
-En **Buscador**, el selector **Persona** filtra por la identidad asociada, aunque
+En **Buscador**, buscar un nombre completo o cualquiera de sus alias encuentra
+las entradas de esa persona, aunque usen otro alias. También aparecen coincidencias
+con alias únicos en transcripciones antiguas aún sin asociar; esto no modifica el
+histórico. Las selecciones manuales, incluidas las menciones dejadas sin identificar,
+prevalecen sobre esas coincidencias. **Buscar en todo el diario** está activado
+por defecto; desmárcalo para limitar las fechas.
+
+El selector **Persona** filtra por la identidad ya asociada, aunque
 la transcripción solo diga «mi prima». Se combina con las fechas y, opcionalmente,
 con el texto de búsqueda. También se puede buscar por el nombre canónico asociado.
 Las personas archivadas siguen disponibles para consultar su histórico. Una mención

@@ -11,6 +11,40 @@ def normalize(value):
     return unicodedata.normalize("NFC", " ".join(str(value).split())).casefold()
 
 
+def split_aliases(values):
+    """Accept the comma/semicolon lists people naturally enter in the registry."""
+    if isinstance(values, str):
+        values = [values]
+    aliases = {}
+    for value in values:
+        for alias in re.split(r"[,;\n]+", value):
+            alias = " ".join(alias.split())
+            if alias:
+                aliases.setdefault(normalize(alias), alias)
+    return list(aliases.values())
+
+
+def alias_text(value):
+    """Fold vowel accents, keeping ñ distinct and preserving character offsets."""
+    return unicodedata.normalize("NFC", value).translate(
+        str.maketrans("áéíóúüÁÉÍÓÚÜ", "aeiouuAEIOUU"))
+
+
+def alias_key(value):
+    return re.sub(r"[\s,]+", " ", alias_text(normalize(value))).strip()
+
+
+def alias_pattern(value):
+    return r"[\s,]+".join(re.escape(word) for word in alias_key(value).split())
+
+
+def normalize_stored_aliases(conn):
+    for person in list_people(conn):
+        conn.execute("DELETE FROM person_aliases WHERE person_id=?", (person["entity_id"],))
+        conn.executemany("INSERT INTO person_aliases VALUES(?,?,?)",
+                         [(person["entity_id"], alias, normalize(alias)) for alias in person["aliases"]])
+
+
 def create_schema(conn):
     first_install = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='person_mentions'").fetchone() is None
     schema = """
@@ -64,6 +98,7 @@ def list_people(conn=None):
                 f"SELECT {field} FROM {table} WHERE person_id=? ORDER BY normalized",
                 (item["entity_id"],))]
         result.append(item)
+        item["aliases"] = split_aliases(item["aliases"])
     return result
 
 
@@ -107,7 +142,8 @@ def save_people(rows, expected):
                 ("origin", "residence", "relationship", "known_from")) + (bool(row.get("archived")), person_id))
             for table, key, field in (("person_aliases", "aliases", "alias"), ("person_groups", "groups", "label")):
                 conn.execute(f"DELETE FROM {table} WHERE person_id=?", (person_id,))
-                for value in row.get(key, []):
+                values = split_aliases(row.get(key, [])) if key == "aliases" else row.get(key, [])
+                for value in values:
                     value = " ".join(value.split())
                     if not value:
                         continue
@@ -123,19 +159,27 @@ def alias_index(conn):
     for person in list_people(conn):
         # Archived identities still reserve their aliases, preventing false unique matches.
         for alias in [person["name"], *person["aliases"]]:
-            index.setdefault(normalize(alias), set()).add(person["entity_id"])
+            key = alias_key(alias)
+            index.setdefault(key, set()).add(person["entity_id"])
             if person["archived"]:
-                index[normalize(alias)].add(None)
+                index[key].add(None)
     return index
 
 
 def literal_spans(text, index):
     """Return literal evidence positions in whitespace-normalized text."""
     source = unicodedata.normalize("NFC", " ".join(text.split()))
-    matches = []
+    folded = alias_text(source)
+    combined = {}
     for alias, ids in index.items():
-        for match in re.finditer(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", source, re.IGNORECASE):
-            matches.append((match.start(), match.end(), match.group(), ids))
+        key = alias_key(alias)
+        if key:
+            combined.setdefault(key, set()).update(ids)
+    matches = []
+    for alias, ids in combined.items():
+        pattern = alias_pattern(alias)
+        for match in re.finditer(r"(?<!\w)" + pattern + r"(?!\w)", folded, re.IGNORECASE):
+            matches.append((match.start(), match.end(), source[match.start():match.end()], ids))
     return matches
 
 
@@ -147,7 +191,7 @@ def select_mentions(matches):
             chosen.append((start, end, alias, ids))
     mentions = {}
     for _, _, alias, ids in chosen:
-        key = normalize(alias)
+        key = alias_key(alias)
         if key not in mentions:
             mentions[key] = (alias, set(ids))
         else:
@@ -162,7 +206,8 @@ def find_mentions(text, index):
 
 def contextual_spans(text, conn):
     """Only local, explicit profile statements; never infer from nearby places."""
-    source = unicodedata.normalize("NFC", " ".join(text.split()))
+    original = unicodedata.normalize("NFC", " ".join(text.split()))
+    source = alias_text(original)
     expressions = {}
     known_spans = literal_spans(text, alias_index(conn))
     for person in list_people(conn):
@@ -170,15 +215,15 @@ def contextual_spans(text, conn):
         if person["archived"]:
             ids.add(None)
         for alias in [person["name"], *person["aliases"]]:
-            name = "(?P<person>" + re.escape(normalize(alias)) + ")"
+            name = "(?P<person>" + alias_pattern(alias) + ")"
             relation = normalize(person["relationship"])
             # Free-form notes are not rules. Only a single relationship label is used.
             if re.fullmatch(r"[\wáéíóúüñ]+", relation):
-                label = re.escape(relation)
+                label = re.escape(alias_text(relation))
                 for pattern in (rf"mi {label} {name}", rf"{name},? mi {label}"):
                     expressions.setdefault(pattern, set()).update(ids)
             for field, phrase in (("residence", "vive en"), ("origin", "es de")):
-                value = normalize(person[field])
+                value = alias_text(normalize(person[field]))
                 if value:
                     pattern = rf"{name},? (?:que )?{phrase} {re.escape(value)}"
                     expressions.setdefault(pattern, set()).update(ids)
@@ -191,10 +236,10 @@ def contextual_spans(text, conn):
                 continue
             clause_prefix = re.split(r"[.!?;]", source[:match.start()])[-1].casefold()
             clause_end = re.search(r"[.!?;]", source[match.end():])
-            if (re.search(r"\b(?:si|quizás|quizá|supongo|creo)\b", clause_prefix)
+            if (re.search(r"\b(?:si|quizas|quiza|supongo|creo)\b", clause_prefix)
                     or (clause_end and clause_end.group() == "?")):
                 continue
-            matches.append((match.start(), match.end(), match.group(), ids, 0))
+            matches.append((match.start(), match.end(), original[match.start():match.end()], ids, 0))
     # Two incompatible explicit clues about the same name require review.
     conflicts = set()
     for i, first in enumerate(matches):
@@ -211,7 +256,7 @@ def resolve_mentions(conn, text, extracted=(), overrides=(), *, context=True):
     index = alias_index(conn)
     for mention in extracted:
         if mention.strip():
-            index.setdefault(normalize(mention), {None})
+            index.setdefault(alias_key(mention), {None})
     matches = [(*m, 0) for m in literal_spans(text, index)]
     if context:
         matches.extend(contextual_spans(text, conn))
@@ -226,7 +271,7 @@ def matching_mention(conn, table, entry_id, mention):
         raise ValueError("Tabla de menciones desconocida")
     return next((r for r in conn.execute(
         f"SELECT mention, person_id FROM {table} WHERE entry_id=?", (entry_id,))
-        if normalize(r["mention"]) == normalize(mention)), None)
+        if alias_key(r["mention"]) == alias_key(mention)), None)
 
 
 def link(conn, entry_id, mention, person_id):
@@ -301,7 +346,7 @@ def correct_entry_people(entry_id, assignments, expected):
                 raise ValueError("La mención añadida debe aparecer literalmente en la transcripción.")
         normalized_assignments = {}
         for mention, person_id in assignments.items():
-            key = normalize(mention)
+            key = alias_key(mention)
             if key in normalized_assignments and normalized_assignments[key] != person_id:
                 raise ValueError("La misma mención tiene dos personas distintas. Unifica la selección de sus variantes.")
             normalized_assignments[key] = person_id
@@ -313,7 +358,7 @@ def correct_entry_people(entry_id, assignments, expected):
             if mention in previous and previous[mention] == person_id:
                 continue
             for row in conn.execute("SELECT mention FROM person_overrides WHERE entry_id=?", (entry_id,)).fetchall():
-                if normalize(row[0]) == normalize(mention):
+                if alias_key(row[0]) == alias_key(mention):
                     conn.execute("DELETE FROM person_overrides WHERE entry_id=? AND mention=?", (entry_id, row[0]))
             conn.execute("INSERT INTO person_overrides VALUES(?,?,?) ON CONFLICT(entry_id,mention) DO UPDATE SET person_id=excluded.person_id", (entry_id, mention, person_id))
             link(conn, entry_id, mention, person_id)

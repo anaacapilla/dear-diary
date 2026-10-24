@@ -174,6 +174,7 @@ def test_search_ui_can_filter_without_typing_a_query(db):
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "web_app.py", default_timeout=20)
     app.session_state["section"] = "Buscador"
     app.run()
+    app.checkbox(key="search_all_history").uncheck().run()
     app.date_input[0].set_value(date(2026, 10, 1))
     app.date_input[1].set_value(date(2026, 10, 31))
     app.selectbox(key="search_person").select(ids["Marta García"]).run()

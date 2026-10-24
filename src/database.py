@@ -9,7 +9,7 @@ from datetime import date, datetime
 from src.config import DATABASE_PATH, DIARY_TZ
 
 DB_PATH = DATABASE_PATH
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def ahora():
@@ -157,6 +157,9 @@ def inicializar_db():
         conn.execute("CREATE TABLE IF NOT EXISTS deleted_web_requests (request_id TEXT PRIMARY KEY)")
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < SCHEMA_VERSION:
+            if version < 12:
+                from src.people import normalize_stored_aliases
+                normalize_stored_aliases(conn)
             if version < 9:
                 from src.people import repair_overlapping_mentions
                 repair_overlapping_mentions(conn)
@@ -283,6 +286,7 @@ def _guardar_relaciones(conn, entry_id, entities, emotions):
 
 
 def guardar_transcripcion(entry_id, text, model, *, seconds=None):
+    from src.people import record_mentions
     with conectar() as conn:
         conn.execute("""
             UPDATE diary_entries SET transcription=?, content_hash=?,
@@ -291,6 +295,7 @@ def guardar_transcripcion(entry_id, text, model, *, seconds=None):
             transcription_seconds=COALESCE(?, transcription_seconds) WHERE id=?
         """, (text, hashlib.sha256(text.encode()).hexdigest(), model,
               "transcribed" if text else "empty", text, seconds, entry_id))
+        record_mentions(conn, entry_id, [])
         conn.execute("DELETE FROM daily_reports")
 
 

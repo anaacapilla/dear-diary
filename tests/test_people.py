@@ -126,7 +126,8 @@ def test_v3_migration_seeds_candidates_and_backups_original_database(db):
         assert not conn.execute("PRAGMA foreign_key_check").fetchall()
 
 
-def test_registry_editor_adds_person_and_saves_fields(db):
+@pytest.mark.parametrize("aliases", ["Lore; Lorena", "Lore, Lorena"])
+def test_registry_editor_adds_person_and_saves_fields(db, aliases):
     from pathlib import Path
     from streamlit.testing.v1 import AppTest
 
@@ -134,7 +135,7 @@ def test_registry_editor_adds_person_and_saves_fields(db):
     app.session_state["section"] = "Mis personas"
     app.run()
     app.session_state["people_editor"] = {"edited_rows": {}, "deleted_rows": [], "added_rows": [
-        {"name": "Lorena García", "aliases": "Lore; Lorena", "groups": ["Universidad", "Cole"],
+        {"name": "Lorena García", "aliases": aliases, "groups": ["Universidad", "Cole"],
          "relationship": "Amistad", "known_from": "Universidad", "residence": "Madrid", "origin": "Sevilla"}]}
     next(b for b in app.button if b.label == "Guardar cambios").click().run()
     assert not app.exception
