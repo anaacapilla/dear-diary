@@ -9,7 +9,7 @@ from datetime import date, datetime
 from src.config import DATABASE_PATH, DIARY_TZ
 
 DB_PATH = DATABASE_PATH
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def ahora():
@@ -130,6 +130,8 @@ def inicializar_db():
         )""")
         version = conn.execute("PRAGMA user_version").fetchone()[0]
         if version < SCHEMA_VERSION:
+            from src.people import repair_overlapping_mentions
+            repair_overlapping_mentions(conn)
             conn.execute("""UPDATE diary_entries SET original_transcription=transcription
                             WHERE original_transcription IS NULL AND transcription<>''""")
             conn.execute("DELETE FROM daily_reports")

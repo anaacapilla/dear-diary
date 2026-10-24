@@ -31,7 +31,14 @@ Para retirar una ficha sin perder sus vínculos, marca **Archivada**.
 Los nombres y alias únicos se vinculan al procesar entradas nuevas, conservando
 las transcripciones y las menciones originales. Las coincidencias usan palabras
 completas, sin distinguir mayúsculas y espacios; no se adivinan variantes ni erratas.
-Los alias compartidos permanecen sin identificar. Archivar una persona detiene
+Los alias compartidos se dejan sin identificar salvo que haya una pista explícita
+y única en la misma expresión: por ejemplo, «mi prima Marta», «Marta, mi prima»,
+«Marta que vive en Valencia» o «Marta que es de Toledo». Para ello, guarda el alias
+«Marta» y la relación simple «prima», la residencia o la procedencia en su ficha.
+Mencionar Valencia cerca de Marta no basta para identificarla. Las pistas compartidas,
+contradictorias, interrogativas o condicionales se dejan para revisión. Las notas libres,
+los grupos y «de qué la conozco» no generan reglas automáticas.
+Archivar una persona detiene
 sus nuevas asociaciones y reserva sus alias para evitar atribuciones incorrectas.
 
 **Por organizar** recoge menciones existentes y nuevas que no tienen identidad.
@@ -46,9 +53,27 @@ y no se haya detectado. Estas correcciones afectan solo a esa entrada, se conser
 al reanalizarla mientras siga apareciendo la mención y no crean alias globales.
 La selección se aplica a todas las apariciones de la misma expresión en esa entrada.
 
+En **Buscador**, el selector **Persona** filtra por la identidad asociada, aunque
+la transcripción solo diga «mi prima». Se combina con las fechas y, opcionalmente,
+con el texto de búsqueda. También se puede buscar por el nombre canónico asociado.
+Las personas archivadas siguen disponibles para consultar su histórico. Una mención
+sin identificar no aparece bajo una persona hasta que se resuelva o se revise.
+
+Esta actualización elimina asociaciones duplicadas por expresiones solapadas del
+histórico, conservando las decisiones manuales y sin asignar nuevas identidades sin
+revisión. Las nuevas propuestas por contexto se aceptan en **Propuestas del histórico**.
+Reinicia tanto el bot como Streamlit para activar el nuevo identificador de personas.
+
 Al actualizar desde una versión anterior, Streamlit o el bot migran SQLite al
 arrancar. Se crea automáticamente una copia en la carpeta `backups` de la base de
 datos. La migración incorpora las menciones anteriores a **Por organizar**.
+
+Si actualizas el código con Streamlit abierto, detén su terminal con **Ctrl+C**
+y vuelve a ejecutar `uv run --group web streamlit run web_app.py` desde la carpeta
+del proyecto. Refrescar el navegador recarga la página, pero puede conservar módulos
+Python antiguos. Si el bot ya ha actualizado SQLite, la web mostrará instrucciones
+para reiniciarse cuando detecte una versión de esquema incompatible. Este reinicio
+no borra entradas y no requiere detener el bot.
 
 ## 🌱 Primeros pasos
 

@@ -2,6 +2,7 @@
 import calendar
 import hashlib
 import json
+import logging
 import sqlite3
 from collections import Counter
 from datetime import date, datetime
@@ -10,7 +11,7 @@ import streamlit as st
 
 from src.config import DIARY_TZ
 from src import database
-from src.web_data import details, entries
+from src.web_data import DiarySchemaError, details, entries
 
 st.set_page_config(page_title="Dear Diary", page_icon="📖", layout="wide")
 
@@ -195,10 +196,18 @@ def main():
             st.warning("La fecha inicial debe ser anterior o igual a la final.")
             return
         if section == "Buscador":
-            st.info("Primera versión: búsqueda literal en transcripciones, resúmenes y acontecimientos. Las preguntas en lenguaje natural se incorporarán en la siguiente fase.")
+            st.info("Busca por texto o filtra por una persona identificada. Las preguntas en lenguaje natural se incorporarán en la siguiente fase.")
+            from src.people import list_people
+            registry = list_people()
+            names = {p["entity_id"]: p["name"] + (" (archivada)" if p["archived"] else "") for p in registry}
+            # Discard a stale selection if the registry was changed externally.
+            if st.session_state.get("search_person") not in names:
+                st.session_state.pop("search_person", None)
+            person_id = st.selectbox("Persona", [None, *names], key="search_person",
+                format_func=lambda value: "Todas las personas" if value is None else names[value])
             query = st.text_input("Buscar en el diario", placeholder="Por ejemplo: Marta, oficina, paseo…")
-            if query.strip():
-                show_results(entries(start, end, query), "search")
+            if query.strip() or person_id:
+                show_results(entries(start, end, query, person_id=person_id), "search")
         else:
             rows = entries(start, end)
             a, b, c = st.columns(3)
@@ -225,5 +234,12 @@ try:
     from src.web_data import prepare_database
     prepare_database()
     main()
-except (sqlite3.Error, ValueError):
+except DiarySchemaError as error:
+    st.error(str(error))
+except (sqlite3.Error, ValueError) as error:
+    # Log only types/codes: exception bodies may contain personal diary data.
+    logging.getLogger(__name__).error(
+        "Diario web no disponible: tipo=%s codigo=%s",
+        type(error).__name__, getattr(error, "sqlite_errorname", "sin_codigo"),
+    )
     st.error("No se puede abrir o actualizar el diario. Comprueba DATABASE_PATH y los permisos del archivo. Si todavía no existe un diario, arranca el bot una vez para crearlo.")

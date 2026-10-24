@@ -65,7 +65,7 @@ def show_people():
             else:
                 refresh("Personas guardadas. Puedes buscar propuestas para las entradas anteriores.")
     with organize:
-        st.caption("Menciones sin identificar. Los alias compartidos permanecen pendientes: puedes elegir a quién se refieren desde la propia entrada, con Editar personas.")
+        st.caption("Menciones sin identificar. Si no hay una pista explícita y única, puedes elegir a quién se refieren desde la propia entrada, con Editar personas.")
         candidates = people.candidates()
         if not candidates:
             st.info("No hay menciones por organizar.")
@@ -90,7 +90,7 @@ def show_people():
                 else:
                     refresh("Alias guardado. Revisa y acepta las asociaciones en Propuestas del histórico.")
     with history:
-        st.caption("Busca nombres y alias únicos en las transcripciones anteriores. Selecciona las asociaciones que quieras aceptar. No se regeneran los audios ni los análisis.")
+        st.caption("Busca nombres, alias y pistas explícitas de las fichas en las transcripciones anteriores. Selecciona las asociaciones que quieras aceptar. No se regeneran los audios ni los análisis.")
         if st.button("Buscar propuestas", key="find_people_proposals"):
             st.session_state.pop("people_review", None)
             st.session_state["people_proposals"] = people.historical_proposals()

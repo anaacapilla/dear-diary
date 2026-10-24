@@ -11,7 +11,7 @@ def save(db, text="texto", **kwargs):
 
 
 def test_entities_and_emotions_are_saved(db):
-    entry = save(db, entities=[("person", "Ana"), ("place", "Madrid"), ("person", "Ana")],
+    entry = save(db, text="Paseé con Ana en Madrid", entities=[("person", "Ana"), ("place", "Madrid"), ("person", "Ana")],
                  emotions=["alegria", "alegria"])
     with db.conectar() as c:
         assert c.execute("SELECT count(*) FROM entry_entities WHERE entry_id=?", (entry,)).fetchone()[0] == 2
@@ -57,9 +57,9 @@ def test_reports_use_madrid_including_midnight_and_dst(db, timestamp, day):
 
 def test_pending_transcription_survives_llm_failure_and_retry(db, analysis):
     entry = save(db, text="", status="pending")
-    db.guardar_transcripcion(entry, "transcrito", "base")
+    db.guardar_transcripcion(entry, "Paseo con Ana en Madrid", "base")
     db.marcar_error(entry, "analysis")
-    assert db.obtener_entrada(entry)["transcription"] == "transcrito"
+    assert db.obtener_entrada(entry)["transcription"] == "Paseo con Ana en Madrid"
     assert db.obtener_reporte_diario("2026-08-30")["pending_count"] == 1
     db.completar_entrada(entry, analysis, "test", "2")
     assert db.obtener_entrada(entry)["status"] == "completed"

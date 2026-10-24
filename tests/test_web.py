@@ -20,7 +20,7 @@ def test_read_only_search_dates_and_literal_text(db):
 
 
 def test_details_include_analysis(db, analysis):
-    entry_id = db.guardar_entrada("Paseo", entities=[("person", "Ana")], emotions=["alegria"])
+    entry_id = db.guardar_entrada("Paseo con Ana", entities=[("person", "Ana")], emotions=["alegria"])
     assert web_data.details(entry_id)["entities"] == [{"entity_type": "person", "entity": "Ana"}]
     assert web_data.details(entry_id)["emotions"] == ["alegria"]
     assert web_data.details("missing") is None
@@ -79,6 +79,28 @@ def test_web_startup_rejects_newer_database(db):
         conn.execute(f"PRAGMA user_version={db.SCHEMA_VERSION + 1}")
     with pytest.raises(ValueError, match="más reciente"):
         web_data.prepare_database()
+
+
+def test_running_web_with_old_schema_shows_restart_instructions(db, monkeypatch):
+    # Simulate Streamlit keeping the imported module while the bot has migrated SQLite.
+    entry_id = db.guardar_entrada("Texto conservado")
+    monkeypatch.setattr(database, "SCHEMA_VERSION", db.SCHEMA_VERSION - 1)
+    with pytest.raises(web_data.DiarySchemaError, match="Ctrl.C"):
+        web_data.prepare_database()
+    with pytest.raises(web_data.DiarySchemaError, match="Refrescar el navegador"):
+        web_data.entries(date(2026, 1, 1), date(2026, 12, 31))
+    assert db.obtener_entrada(entry_id)["transcription"] == "Texto conservado"
+
+
+def test_schema_error_is_visible_in_streamlit(db, monkeypatch):
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setattr(database, "SCHEMA_VERSION", db.SCHEMA_VERSION - 1)
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "web_app.py").run()
+    assert not app.exception
+    assert len(app.error) == 1
+    assert "Ctrl+C" in app.error[0].value
+    assert "permisos" not in app.error[0].value
 
 
 def test_calendar_arrows_and_edit(db):

@@ -129,21 +129,95 @@ def alias_index(conn):
     return index
 
 
-def find_mentions(text, index):
+def literal_spans(text, index):
+    """Return literal evidence positions in whitespace-normalized text."""
     source = unicodedata.normalize("NFC", " ".join(text.split()))
     matches = []
     for alias, ids in index.items():
         for match in re.finditer(r"(?<!\w)" + re.escape(alias) + r"(?!\w)", source, re.IGNORECASE):
             matches.append((match.start(), match.end(), match.group(), ids))
-    # Prefer “mi prima Marta” over a shorter “Marta” at the same location.
+    return matches
+
+
+def select_mentions(matches):
+    """Prefer explicit manual decisions, then the most specific expression."""
     chosen = []
-    for start, end, alias, ids in sorted(matches, key=lambda m: (-(m[1]-m[0]), m[0])):
+    for start, end, alias, ids, priority in sorted(matches, key=lambda m: (-m[4], -(m[1]-m[0]), m[0])):
         if not any(start < b and end > a for a, b, _, _ in chosen):
             chosen.append((start, end, alias, ids))
     mentions = {}
     for _, _, alias, ids in chosen:
-        mentions.setdefault(normalize(alias), (alias, next(iter(ids)) if len(ids) == 1 else None))
-    return list(mentions.values())
+        key = normalize(alias)
+        if key not in mentions:
+            mentions[key] = (alias, set(ids))
+        else:
+            mentions[key][1].update(ids)
+    return [(alias, next(iter(ids)) if len(ids) == 1 else None)
+            for alias, ids in mentions.values()]
+
+
+def find_mentions(text, index):
+    return select_mentions([(*match, 0) for match in literal_spans(text, index)])
+
+
+def contextual_spans(text, conn):
+    """Only local, explicit profile statements; never infer from nearby places."""
+    source = unicodedata.normalize("NFC", " ".join(text.split()))
+    expressions = {}
+    known_spans = literal_spans(text, alias_index(conn))
+    for person in list_people(conn):
+        ids = {person["entity_id"]}
+        if person["archived"]:
+            ids.add(None)
+        for alias in [person["name"], *person["aliases"]]:
+            name = "(?P<person>" + re.escape(normalize(alias)) + ")"
+            relation = normalize(person["relationship"])
+            # Free-form notes are not rules. Only a single relationship label is used.
+            if re.fullmatch(r"[\wáéíóúüñ]+", relation):
+                label = re.escape(relation)
+                for pattern in (rf"mi {label} {name}", rf"{name},? mi {label}"):
+                    expressions.setdefault(pattern, set()).update(ids)
+            for field, phrase in (("residence", "vive en"), ("origin", "es de")):
+                value = normalize(person[field])
+                if value:
+                    pattern = rf"{name},? (?:que )?{phrase} {re.escape(value)}"
+                    expressions.setdefault(pattern, set()).update(ids)
+    matches = []
+    for pattern, ids in expressions.items():
+        for match in re.finditer(r"(?<!\w)(?:" + pattern + r")(?!\w)", source, re.IGNORECASE):
+            start, end = match.span("person")
+            if any(a <= start and b >= end and b - a > end - start
+                   for a, b, _, _ in known_spans):
+                continue
+            clause_prefix = re.split(r"[.!?;]", source[:match.start()])[-1].casefold()
+            clause_end = re.search(r"[.!?;]", source[match.end():])
+            if (re.search(r"\b(?:si|quizás|quizá|supongo|creo)\b", clause_prefix)
+                    or (clause_end and clause_end.group() == "?")):
+                continue
+            matches.append((match.start(), match.end(), match.group(), ids, 0))
+    # Two incompatible explicit clues about the same name require review.
+    conflicts = set()
+    for i, first in enumerate(matches):
+        for j, second in enumerate(matches[:i]):
+            if first[0] < second[1] and first[1] > second[0] and not first[3].intersection(second[3]):
+                conflicts.update((i, j))
+    matches = [(a, b, mention, {None} if i in conflicts else ids, priority)
+               for i, (a, b, mention, ids, priority) in enumerate(matches)]
+    return matches
+
+
+def resolve_mentions(conn, text, extracted=(), overrides=(), *, context=True):
+    """Reconcile all sources by evidence span before linking identities."""
+    index = alias_index(conn)
+    for mention in extracted:
+        if mention.strip():
+            index.setdefault(normalize(mention), {None})
+    matches = [(*m, 0) for m in literal_spans(text, index)]
+    if context:
+        matches.extend(contextual_spans(text, conn))
+    for row in overrides:
+        matches.extend((*m, 1) for m in literal_spans(text, {normalize(row["mention"]): {row["person_id"]}}))
+    return select_mentions(matches)
 
 
 def matching_mention(conn, table, entry_id, mention):
@@ -165,23 +239,29 @@ def link(conn, entry_id, mention, person_id):
 
 def record_mentions(conn, entry_id, entities):
     conn.execute("DELETE FROM person_mentions WHERE entry_id=?", (entry_id,))
-    index = alias_index(conn)
     text = conn.execute("SELECT transcription FROM diary_entries WHERE id=?", (entry_id,)).fetchone()[0]
-    for kind, mention in entities:
-        if kind == "person" and mention.strip():
-            ids = index.get(normalize(mention), set())
-            link(conn, entry_id, mention.strip(), next(iter(ids)) if len(ids) == 1 else None)
-    for mention, person_id in find_mentions(text, index):
-        link(conn, entry_id, mention, person_id)
-    for row in conn.execute("SELECT mention, person_id FROM person_overrides WHERE entry_id=?", (entry_id,)).fetchall():
-        if find_mentions(text, {normalize(row["mention"]): {row["person_id"]}}):
-            for current in conn.execute("SELECT mention FROM person_mentions WHERE entry_id=?", (entry_id,)).fetchall():
-                if normalize(current[0]) == normalize(row["mention"]):
-                    conn.execute("DELETE FROM person_mentions WHERE entry_id=? AND mention=?", (entry_id, current[0]))
-            link(conn, entry_id, row["mention"], row["person_id"])
-        else:
+    overrides = conn.execute("SELECT mention, person_id FROM person_overrides WHERE entry_id=?", (entry_id,)).fetchall()
+    for row in overrides:
+        if not find_mentions(text, {normalize(row["mention"]): {row["person_id"]}}):
             conn.execute("DELETE FROM person_overrides WHERE entry_id=? AND mention=?", (entry_id, row["mention"]))
+    for mention, person_id in resolve_mentions(conn, text, [m for kind, m in entities if kind == "person"], overrides):
+        link(conn, entry_id, mention, person_id)
     sync_entry_people(conn, entry_id)
+
+
+def repair_overlapping_mentions(conn, entry_ids=None):
+    """Repair legacy duplicate links without adding unreviewed historical identities."""
+    for entry in conn.execute("SELECT id, transcription FROM diary_entries").fetchall():
+        if entry_ids is not None and entry["id"] not in entry_ids:
+            continue
+        saved = conn.execute("SELECT mention, person_id FROM person_mentions WHERE entry_id=?", (entry["id"],)).fetchall()
+        manual = conn.execute("SELECT mention, person_id FROM person_overrides WHERE entry_id=?", (entry["id"],)).fetchall()
+        matches = [(*m, 0) for row in saved for m in literal_spans(entry["transcription"], {normalize(row["mention"]): {row["person_id"]}})]
+        matches.extend((*m, 1) for row in manual for m in literal_spans(entry["transcription"], {normalize(row["mention"]): {row["person_id"]}}))
+        conn.execute("DELETE FROM person_mentions WHERE entry_id=?", (entry["id"],))
+        for mention, person_id in select_mentions(matches):
+            link(conn, entry["id"], mention, person_id)
+        sync_entry_people(conn, entry["id"])
 
 
 def sync_entry_people(conn, entry_id):
@@ -237,7 +317,7 @@ def correct_entry_people(entry_id, assignments, expected):
                     conn.execute("DELETE FROM person_overrides WHERE entry_id=? AND mention=?", (entry_id, row[0]))
             conn.execute("INSERT INTO person_overrides VALUES(?,?,?) ON CONFLICT(entry_id,mention) DO UPDATE SET person_id=excluded.person_id", (entry_id, mention, person_id))
             link(conn, entry_id, mention, person_id)
-        sync_entry_people(conn, entry_id)
+        repair_overlapping_mentions(conn, {entry_id})
         conn.execute("DELETE FROM daily_reports")
 
 
@@ -249,15 +329,12 @@ def candidates():
 
 def historical_proposals():
     with database.conectar() as conn:
-        index = alias_index(conn)
         names = {p["entity_id"]: p["name"] for p in list_people(conn)}
         proposals = []
         for entry in conn.execute("SELECT id, transcription FROM diary_entries WHERE status='completed'"):
-            mentions = dict(find_mentions(entry["transcription"], index))
-            for row in conn.execute("SELECT mention FROM person_mentions WHERE entry_id=? AND person_id IS NULL", (entry["id"],)):
-                ids = index.get(normalize(row[0]), set())
-                mentions[row[0]] = next(iter(ids)) if len(ids) == 1 else None
-            for mention, person_id in mentions.items():
+            saved = conn.execute("SELECT mention FROM person_mentions WHERE entry_id=?", (entry["id"],)).fetchall()
+            manual = conn.execute("SELECT mention, person_id FROM person_overrides WHERE entry_id=?", (entry["id"],)).fetchall()
+            for mention, person_id in resolve_mentions(conn, entry["transcription"], [r[0] for r in saved], manual):
                 if not person_id:
                     continue
                 if matching_mention(conn, "person_overrides", entry["id"], mention) is not None:
@@ -274,11 +351,12 @@ def historical_proposals():
 def accept_proposals(proposals):
     with database.conectar() as conn:
         conn.execute("BEGIN IMMEDIATE")
-        index = alias_index(conn)
         for proposal in proposals:
             entry_id, mention, person_id = (proposal[k] for k in ("entry_id", "mention", "person_id"))
             entry = conn.execute("SELECT transcription, status FROM diary_entries WHERE id=?", (entry_id,)).fetchone()
-            if not entry or entry["status"] != "completed" or entry["transcription"] != proposal["text"] or index.get(normalize(mention)) != {person_id}:
+            manual = conn.execute("SELECT mention, person_id FROM person_overrides WHERE entry_id=?", (entry_id,)).fetchall()
+            resolved = dict(resolve_mentions(conn, entry["transcription"], overrides=manual)) if entry else {}
+            if not entry or entry["status"] != "completed" or entry["transcription"] != proposal["text"] or resolved.get(mention) != person_id:
                 raise ValueError("Las propuestas han cambiado. Vuelve a buscar coincidencias.")
             current = matching_mention(conn, "person_mentions", entry_id, mention)
             if matching_mention(conn, "person_overrides", entry_id, mention) is not None:
@@ -287,4 +365,5 @@ def accept_proposals(proposals):
                 raise ValueError("La mención ya tiene otra persona asignada. Vuelve a buscar coincidencias.")
             link(conn, entry_id, mention, person_id)
             sync_entry_people(conn, entry_id)
+        repair_overlapping_mentions(conn, {p["entry_id"] for p in proposals})
         conn.execute("DELETE FROM daily_reports")
