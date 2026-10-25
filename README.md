@@ -61,6 +61,55 @@ Si Whisper falla al usar CUDA, configura `WHISPER_DEVICE=cpu` y
 
 ## 🚀 Arrancar el diario
 
+### Transcribir con Groq (opcional)
+
+1. Crea una cuenta en [Groq Console](https://console.groq.com/) y mantén el plan
+   **Free** si quieres evitar facturación.
+2. En [API Keys](https://console.groq.com/keys), crea una clave. Guárdala solamente
+   en tu `.env`, nunca en Git, capturas ni mensajes.
+3. Antes de enviar audios personales, activa **Zero Data Retention** para audio
+   en [Data Controls](https://console.groq.com/settings/data-controls).
+   La aplicación no puede activar ni verificar esta opción por ti.
+4. Añade o actualiza estas líneas en tu `.env` existente:
+
+   ```dotenv
+   TRANSCRIPTION_PROVIDER=groq
+   GROQ_API_KEY=tu_clave
+   GROQ_MODEL=whisper-large-v3
+   ```
+
+5. Ejecuta `uv sync --locked --group web` y reinicia el bot y Streamlit.
+   Envía primero una nota de voz poco sensible y comprueba el texto en la web.
+   El modelo guardado en la entrada será `groq/whisper-large-v3`.
+
+Con Groq, el audio sale de tu ordenador; el análisis con Ollama sigue siendo local.
+ZDR depende de los controles y condiciones de Groq y no afecta a Telegram ni a
+los audios originales y copias locales. Consulta [su política](https://console.groq.com/docs/your-data).
+
+El motor convierte el audio incrementalmente a WAV mono de 16 kHz y lo divide en
+fragmentos consecutivos de hasta diez minutos (19,2 MB), sin truncar ni descartar
+muestras. Los textos se unen en orden. Si Groq devuelve HTTP 413, divide ese
+fragmento en mitades y vuelve a intentarlo. Los cortes pueden afectar a palabras
+en los límites; revisa las transcripciones importantes. Los WAV temporales se
+eliminan al terminar o fallar; el original sigue la retención habitual.
+
+Los fallos de red, HTTP 429 y errores de servidor tienen hasta tres reintentos.
+Si la espera indicada supera un minuto o se agotan los intentos, la entrada queda
+fallida y permite **Reintentar** después. Una transcripción completa ya guardada
+se reutiliza si falla el análisis. Si falla a mitad de la transcripción, el
+reintento vuelve a procesar el audio completo y consume cuota otra vez.
+No se cambia automáticamente de proveedor ni se usa el modelo Turbo.
+
+Comprueba tus cuotas en [Limits](https://console.groq.com/settings/limits).
+Dividir archivos no evita las cuotas de duración. El diario conserva sus límites
+de recepción de 20 MB y 30 minutos por audio; la división opera después de recibirlo.
+La subida desde Telegram sigue sujeta a los límites del Bot API.
+
+Para volver al procesamiento local, usa `TRANSCRIPTION_PROVIDER=local` y reinicia.
+Los módulos locales no cargan pesos cuando se selecciona Groq. Las evaluaciones
+de `evaluation.run` también usan el proveedor configurado: con Groq envían el
+corpus seleccionado a su API y consumen cuota.
+
 Abre dos terminales en la carpeta del proyecto. En el primer uso, arranca el bot
 antes que la web para crear la base de datos.
 

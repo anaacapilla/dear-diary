@@ -15,7 +15,7 @@ from telegram.ext import (
 from src import database, entry_actions
 from src.config import (
     AUDIO_DIR, LOG_LEVEL, MAX_AUDIO_BYTES, MAX_AUDIO_SECONDS, OLLAMA_MODEL,
-    TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, WHISPER_MODEL, validar_telegram,
+    TELEGRAM_BOT_TOKEN, TELEGRAM_USER_ID, TRANSCRIPTION_MODEL, validar_telegram, validar_transcripcion,
 )
 from src.llm.extractor import DiaryExtractor
 from src.llm.prompts import PROMPT_VERSION
@@ -144,7 +144,7 @@ async def procesar_entrada(entry, bot, message, extractor=None):
                     partial.unlink(missing_ok=True)
             stage = "transcription"
             text, transcription_time = await progress.wait(asyncio.to_thread(transcribir, ruta), "✍️ Transcribiendo tu entrada…")
-            await asyncio.to_thread(database.guardar_transcripcion, entry_id, text, WHISPER_MODEL,
+            await asyncio.to_thread(database.guardar_transcripcion, entry_id, text, TRANSCRIPTION_MODEL,
                                     seconds=transcription_time)
             if not text:
                 empty = {**entry, "status": "empty", "transcription": ""}
@@ -313,6 +313,7 @@ async def on_error(update, context):
 
 def crear_aplicacion():
     validar_telegram()
+    validar_transcripcion()
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.post_init = post_init
     app.post_stop = post_stop

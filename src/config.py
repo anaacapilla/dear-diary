@@ -34,6 +34,18 @@ if WHISPER_MODEL.startswith("openai/whisper-"):
     WHISPER_MODEL = WHISPER_MODEL.removeprefix("openai/whisper-")
 WHISPER_DEVICE = get_env("WHISPER_DEVICE", "auto")
 WHISPER_COMPUTE_TYPE = get_env("WHISPER_COMPUTE_TYPE", "auto")
+TRANSCRIPTION_PROVIDER = get_env("TRANSCRIPTION_PROVIDER", "local")
+GROQ_API_KEY = get_env("GROQ_API_KEY", "")
+GROQ_MODEL = get_env("GROQ_MODEL", "whisper-large-v3")
+TRANSCRIPTION_MODEL = f"groq/{GROQ_MODEL}" if TRANSCRIPTION_PROVIDER == "groq" else WHISPER_MODEL
+
+
+def validar_transcripcion():
+    if TRANSCRIPTION_PROVIDER not in ("local", "groq"):
+        raise ValueError("TRANSCRIPTION_PROVIDER debe ser local o groq")
+    if TRANSCRIPTION_PROVIDER == "groq" and not GROQ_API_KEY.strip():
+        raise ValueError("Configura GROQ_API_KEY para transcribir con Groq")
+
 LOG_LEVEL = get_env("LOG_LEVEL", "INFO") or "INFO"
 DIARY_TIMEZONE = get_env("DIARY_TIMEZONE", "Europe/Madrid") or "Europe/Madrid"
 DIARY_TZ = ZoneInfo(DIARY_TIMEZONE)

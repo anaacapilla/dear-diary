@@ -5,8 +5,10 @@ description = "Diario de voz privado en Telegram con Whisper, Ollama y SQLite"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "av>=14",
     "ctranslate2>=4.5",
     "faster-whisper>=1.2.1",
+    "httpx>=0.28,<1",
     "ollama>=0.6.2",
     "pydantic>=2.13.5",
     "python-dotenv>=1.2.2",

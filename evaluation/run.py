@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.config import DIARY_TIMEZONE, OLLAMA_MODEL, PROJECT_ROOT, WHISPER_MODEL
+from src.config import DIARY_TIMEZONE, OLLAMA_MODEL, PROJECT_ROOT, TRANSCRIPTION_MODEL
 from src.llm.extractor import DiaryExtractor, INFERENCE_OPTIONS
 from src.llm.prompts import DAILY_SYSTEM_PROMPT, PROMPT_VERSION, SYSTEM_PROMPT
 from src.transcriber import transcribir
@@ -67,7 +67,7 @@ def experiment_metadata(dataset, extractor):
         "dataset": str(dataset.resolve()),
         "dataset_sha256": hashlib.sha256(dataset.read_bytes()).hexdigest(),
         "python": platform.python_version(), "platform": platform.platform(),
-        "whisper_model": WHISPER_MODEL, "ollama_model": OLLAMA_MODEL,
+        "whisper_model": TRANSCRIPTION_MODEL, "ollama_model": OLLAMA_MODEL,
         "ollama_digest": digest, "prompt_version": PROMPT_VERSION,
         "system_prompt": SYSTEM_PROMPT, "daily_system_prompt": DAILY_SYSTEM_PROMPT,
         "inference_options": INFERENCE_OPTIONS, "think": False,

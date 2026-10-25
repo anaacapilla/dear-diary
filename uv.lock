@@ -398,8 +398,10 @@ name = "dear-diary"
 version = "0.2.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "av" },
     { name = "ctranslate2" },
     { name = "faster-whisper" },
+    { name = "httpx" },
     { name = "ollama" },
     { name = "pydantic" },
     { name = "python-dotenv" },
@@ -422,8 +424,10 @@ web = [
 
 [package.metadata]
 requires-dist = [
+    { name = "av", specifier = ">=14" },
     { name = "ctranslate2", specifier = ">=4.5" },
     { name = "faster-whisper", specifier = ">=1.2.1" },
+    { name = "httpx", specifier = ">=0.28,<1" },
     { name = "ollama", specifier = ">=0.6.2" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "python-dotenv", specifier = ">=1.2.2" },

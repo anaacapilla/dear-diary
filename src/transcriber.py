@@ -4,6 +4,7 @@ from functools import lru_cache
 from threading import Lock
 
 from src.config import WHISPER_COMPUTE_TYPE, WHISPER_DEVICE, WHISPER_MODEL
+from src.config import TRANSCRIPTION_PROVIDER, validar_transcripcion
 
 logger = logging.getLogger(__name__)
 _lock = Lock()
@@ -25,6 +26,11 @@ def obtener_modelo():
 
 
 def transcribir(ruta):
+    validar_transcripcion()
+    if TRANSCRIPTION_PROVIDER == "groq":
+        from src.groq_transcriber import transcribir_groq
+        with _lock:
+            return transcribir_groq(ruta)
     with _lock:
         segmentos, _ = obtener_modelo().transcribe(
             str(ruta), language="es", task="transcribe", vad_filter=True,
