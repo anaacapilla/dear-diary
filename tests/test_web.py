@@ -7,6 +7,39 @@ import pytest
 from src import database, web_data
 
 
+def test_search_combines_indexed_filters(db):
+    day = date(2026, 10, 22)
+    target = db.guardar_entrada("Paseo", entry_date=day, source="web",
+        entities=[("place", "Madrid"), ("activity", "Caminar")],
+        emotions=["alegria"], sentiment="positivo")
+    db.guardar_entrada("Paseo", entry_date=day, source="telegram",
+        entities=[("place", "Madrid")], emotions=["tristeza"], sentiment="negativo")
+    filters = dict(entity_filters={"place": "Madrid", "activity": "Caminar"},
+                   emotion="alegria", sentiment="positivo", source="web", status="completed")
+    assert [r["id"] for r in web_data.entries(day, day, **filters)] == [target]
+    assert not web_data.entries(day, day, "ausente", **filters)
+    assert not web_data.entries(day, day, **{**filters, "emotion": "tristeza"})
+    assert not web_data.entries(day, day, entity_filters={"place": "Madrid' OR 1=1 --"})
+    options = web_data.search_options()
+    assert options["entities"] == {"activity": ["Caminar"], "place": ["Madrid"]}
+    assert options["emotions"] == ["alegria", "tristeza"]
+
+
+def test_search_ui_filters_without_text(db):
+    pytest.importorskip("streamlit")
+    from streamlit.testing.v1 import AppTest
+    db.guardar_entrada("Un paseo", entry_date="2026-10-22",
+                       entities=[("place", "Madrid")], emotions=["alegria"])
+    app = AppTest.from_file(Path(__file__).resolve().parents[1] / "web_app.py", default_timeout=15).run()
+    app.sidebar.button(key="nav_Buscador").click().run()
+    assert not app.exception
+    app.selectbox(key="search_entity_place").select("Madrid").run()
+    app.selectbox(key="search_emotion").select("alegria").run()
+    next(b for b in app.button if b.label == "Aplicar filtros").click().run()
+    assert not app.exception
+    assert any(c.value == "1 entradas" for c in app.caption)
+
+
 def test_read_only_search_dates_and_literal_text(db):
     entry_id = db.guardar_entrada("MARTA: 100% feliz", recorded_at="2026-10-21T23:30:00+00:00")
     assert not web_data.entries(date(2026, 10, 21), date(2026, 10, 21))

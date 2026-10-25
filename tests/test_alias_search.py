@@ -145,7 +145,8 @@ def test_search_ui_defaults_to_all_dates_and_finds_canonical_name_from_alias(db)
     app = AppTest.from_file(Path(__file__).resolve().parents[1] / "web_app.py", default_timeout=20)
     app.session_state["section"] = "Buscador"
     app.run()
-    next(t for t in app.text_input if t.label == "Buscar en el diario").input(MOTHER).run()
+    next(t for t in app.text_input if t.label == "Buscar en el diario").input(MOTHER)
+    next(b for b in app.button if b.label == "Buscar como texto literal").click().run()
     assert not app.exception
     assert app.checkbox(key="search_all_history").value is True
     assert any("Mami llamó" in element.value for element in app.text)

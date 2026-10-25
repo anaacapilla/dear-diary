@@ -36,4 +36,5 @@ __pycache__/
 backups/
 evaluation/results/
 .pytest_cache/
+.tmp-tests-*/
 evaluation/private/

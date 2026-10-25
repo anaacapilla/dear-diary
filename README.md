@@ -79,12 +79,34 @@ y no se haya detectado. Estas correcciones afectan solo a esa entrada, se conser
 al reanalizarla mientras siga apareciendo la mención y no crean alias globales.
 La selección se aplica a todas las apariciones de la misma expresión en esa entrada.
 
-En **Buscador**, buscar un nombre completo o cualquiera de sus alias encuentra
+En **Buscador**, escribe una frase como «días que he ido a la ofi este último mes»
+y pulsa **Buscar**. La pantalla muestra el periodo y los criterios entendidos;
+**Editar interpretación** permite corregirlos sin otra llamada al modelo.
+Las fechas relativas usan el día actual en `DIARY_TIMEZONE`: «último mes» significa
+un mes hacia atrás hasta hoy; «mes pasado», el mes natural anterior completo.
+Las expresiones habituales reconocidas completas se resuelven directamente; el
+resto se interpreta con Ollama usando un esquema validado y el catálogo existente.
+No se envían transcripciones al intérprete. `SEARCH_MODEL` permite elegir un modelo
+distinto del de análisis; `SEARCH_TIMEOUT_SECONDS` limita la espera (30 por defecto).
+Si Ollama falla, se muestra el fallo y sigue disponible la búsqueda literal.
+La calidad de las interpretaciones libres depende del modelo: debe evaluarse con
+`python -m evaluation.search --model-only` antes de darla por validada.
+
+«Días» agrupa las entradas coincidentes por su día del diario. Los criterios se
+aplican a la misma entrada. Los lugares son menciones indexadas, no pruebas de
+visitas; una emoción corresponde al análisis global de la entrada. «Ofi» se
+resuelve a «oficina» solo si el lugar existe y es único. Las ambigüedades requieren
+precisar la frase; no se inventan identidades. Los filtros tradicionales quedan
+plegados en **Búsqueda con filtros** y funcionan sin modelo.
+La comparación de alternativas y las limitaciones se detallan en
+[el diseño del buscador](docs/buscador-natural.md).
+
+Con **Buscar como texto literal**, buscar un nombre completo o cualquiera de sus alias encuentra
 las entradas de esa persona, aunque usen otro alias. También aparecen coincidencias
 con alias únicos en transcripciones antiguas aún sin asociar; esto no modifica el
 histórico. Las selecciones manuales, incluidas las menciones dejadas sin identificar,
-prevalecen sobre esas coincidencias. **Buscar en todo el diario** está activado
-por defecto; desmárcalo para limitar las fechas.
+prevalecen sobre esas coincidencias. En los filtros manuales, **Buscar en todo el
+diario** está activado por defecto; desmárcalo para limitar las fechas.
 
 El selector **Persona** filtra por la identidad ya asociada, aunque
 la transcripción solo diga «mi prima». Se combina con las fechas y, opcionalmente,

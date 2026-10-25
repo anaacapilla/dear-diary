@@ -176,8 +176,9 @@ def test_search_ui_can_filter_without_typing_a_query(db):
     app.run()
     app.checkbox(key="search_all_history").uncheck().run()
     app.date_input[0].set_value(date(2026, 10, 1))
-    app.date_input[1].set_value(date(2026, 10, 31))
+    app.date_input[1].set_value(date(2026, 10, 24))
     app.selectbox(key="search_person").select(ids["Marta García"]).run()
+    next(b for b in app.button if b.label == "Aplicar filtros").click().run()
     assert not app.exception
     assert len(app.expander) >= 1
     assert any("Vi a la prima" in element.value for element in app.text)

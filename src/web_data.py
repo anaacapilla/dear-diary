@@ -59,9 +59,44 @@ def read_connection():
         conn.close()
 
 
-def entries(start, end, query="", *, person_id=None):
+def search_options():
+    """Offer only values attached to existing entries, including new entity types."""
+    with read_connection() as conn:
+        entities = {}
+        for row in conn.execute("""SELECT DISTINCT en.entity_type, en.entity
+                FROM entities en JOIN entry_entities ee ON ee.entity_id=en.id
+                WHERE en.entity_type NOT IN ('person', 'person_mention')
+                ORDER BY en.entity_type, en.entity COLLATE NOCASE"""):
+            entities.setdefault(row["entity_type"], []).append(row["entity"])
+        options = {field: [r[0] for r in conn.execute(
+            f"SELECT DISTINCT {field} FROM diary_entries WHERE {field} IS NOT NULL AND {field}<>'' ORDER BY {field}"
+        )] for field in ("sentiment", "source", "status")}
+        options["entities"] = entities
+        options["emotions"] = [r[0] for r in conn.execute("""SELECT DISTINCT e.emotion
+            FROM emotions e JOIN entry_emotions ee ON ee.emotion_id=e.id ORDER BY e.emotion""")]
+        return options
+
+
+def entries(start, end, query="", *, person_id=None, entity_filters=None,
+            emotion=None, sentiment=None, source=None, status=None):
     """Search text or a person's interchangeable names, without modifying history."""
     with read_connection() as conn:
+        clauses, parameters = [], []
+        for kind, value in (entity_filters or {}).items():
+            clauses.append("""EXISTS (SELECT 1 FROM entry_entities ee
+                JOIN entities en ON en.id=ee.entity_id
+                WHERE ee.entry_id=diary_entries.id AND en.entity_type=? AND en.entity=?)""")
+            parameters.extend((kind, value))
+        if emotion is not None:
+            clauses.append("""EXISTS (SELECT 1 FROM entry_emotions ee
+                JOIN emotions e ON e.id=ee.emotion_id
+                WHERE ee.entry_id=diary_entries.id AND e.emotion=?)""")
+            parameters.append(emotion)
+        for field, value in (("sentiment", sentiment), ("source", source), ("status", status)):
+            if value is not None:
+                clauses.append(f"{field}=?")
+                parameters.append(value)
+        extra = " AND " + " AND ".join(clauses) if clauses else ""
         rows = conn.execute("""
             SELECT *, COALESCE(entry_date, diary_date(COALESCE(recorded_at,received_at,created_at))) AS day
             FROM diary_entries
@@ -69,8 +104,8 @@ def entries(start, end, query="", *, person_id=None):
             AND (? IS NULL OR EXISTS (
                 SELECT 1 FROM person_mentions pm
                 WHERE pm.entry_id=diary_entries.id AND pm.person_id=?))
-            ORDER BY COALESCE(recorded_at,received_at,created_at) DESC, id
-        """, (start.isoformat(), end.isoformat(), person_id, person_id)).fetchall()
+        """ + extra + " ORDER BY COALESCE(recorded_at,received_at,created_at) DESC, id",
+            (start.isoformat(), end.isoformat(), person_id, person_id, *parameters)).fetchall()
         if not rows or not query.strip():
             return [dict(row) for row in rows]
         registry = people.list_people(conn)

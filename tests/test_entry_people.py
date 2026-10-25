@@ -96,7 +96,8 @@ def test_edit_people_from_calendar_and_search(db):
     assert not app.exception
     assert db.obtener_detalles(entry)["people"] == ["Ana García"]
     app.sidebar.button(key="nav_Buscador").click().run()
-    next(t for t in app.text_input if t.label == "Buscar en el diario").input("prima").run()
+    next(t for t in app.text_input if t.label == "Buscar en el diario").input("prima")
+    next(b for b in app.button if b.label == "Buscar como texto literal").click().run()
     assert not app.exception
     app.button(key="open_people_" + entry).click().run()
     assert not app.exception

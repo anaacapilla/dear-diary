@@ -274,31 +274,9 @@ def main():
         st.subheader(selected.strftime("%d/%m/%Y"))
         add_entry(selected, today)
         show_results([r for r in rows if r["day"] == selected.isoformat()], "entries")
-    else:
-        all_history = st.checkbox("Buscar en todo el diario", value=True, key="search_all_history")
-        left, right = st.columns(2)
-        start = left.date_input("Desde", value=today.replace(day=1), disabled=all_history)
-        end = right.date_input("Hasta", value=today, disabled=all_history)
-        if all_history:
-            start, end = date(1900, 1, 1), today
-        if start > end:
-            st.warning("La fecha inicial debe ser anterior o igual a la final.")
-            return
-        if section == "Buscador":
-            st.info("Busca por nombre completo, cualquiera de sus alias o texto del diario. Un nombre o alias único encuentra también las otras formas de mencionar a esa persona.")
-            st.caption("Se incluyen coincidencias con alias únicos todavía sin confirmar. Para guardar esas asociaciones, revisa Propuestas del histórico en Mis personas. El filtro Persona se limita a entradas ya identificadas.")
-            from src.people import list_people
-            registry = list_people()
-            names = {p["entity_id"]: p["name"] + (" · " + ", ".join(p["aliases"]) if p["aliases"] else "")
-                     + (" (archivada)" if p["archived"] else "") for p in registry}
-            # Discard a stale selection if the registry was changed externally.
-            if st.session_state.get("search_person") not in names:
-                st.session_state.pop("search_person", None)
-            person_id = st.selectbox("Persona", [None, *names], key="search_person",
-                format_func=lambda value: "Todas las personas" if value is None else names[value])
-            query = st.text_input("Buscar en el diario", placeholder="Por ejemplo: Marta, oficina, paseo…")
-            if query.strip() or person_id:
-                show_results(entries(start, end, query, person_id=person_id), "search")
+    elif section == "Buscador":
+        from src.search_ui import show_search
+        show_search(today, show_results)
 
 
 

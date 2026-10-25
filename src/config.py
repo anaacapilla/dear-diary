@@ -26,6 +26,8 @@ def project_path(name: str, default: str) -> Path:
 TELEGRAM_BOT_TOKEN = get_env("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_USER_ID = int(get_env("TELEGRAM_USER_ID", "0") or "0")
 OLLAMA_MODEL = get_env("OLLAMA_MODEL", "qwen3:1.7b") or "qwen3:1.7b"
+SEARCH_MODEL = get_env("SEARCH_MODEL", OLLAMA_MODEL) or OLLAMA_MODEL
+SEARCH_TIMEOUT_SECONDS = float(get_env("SEARCH_TIMEOUT_SECONDS", "30"))
 WHISPER_MODEL = get_env("WHISPER_MODEL", "base") or "base"
 # Accept old .env values, loading faster-whisper's converted weights.
 if WHISPER_MODEL.startswith("openai/whisper-"):
@@ -45,7 +47,7 @@ MAX_AUDIO_BYTES = int(get_env("MAX_AUDIO_BYTES", "20000000"))
 MAX_AUDIO_SECONDS = int(get_env("MAX_AUDIO_SECONDS", "1800"))
 MAX_LLM_CHARS = int(get_env("MAX_LLM_CHARS", "12000"))
 if min(AUDIO_RETENTION_DAYS, BACKUP_RETENTION_DAYS, MAX_AUDIO_BYTES,
-       MAX_AUDIO_SECONDS, MAX_LLM_CHARS, OLLAMA_TIMEOUT_SECONDS) <= 0:
+       MAX_AUDIO_SECONDS, MAX_LLM_CHARS, OLLAMA_TIMEOUT_SECONDS, SEARCH_TIMEOUT_SECONDS) <= 0:
     raise ValueError("Los límites y periodos de retención deben ser positivos")
 
 
