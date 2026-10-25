@@ -2,350 +2,241 @@
 
 ### Tu día, contado con tu voz.
 
-Un diario personal en el que envías audios por **Telegram** y consultas tus recuerdos
-desde una web con **Streamlit**. El audio se transcribe, se analiza y se guarda junto
-con su resumen, emociones, personas, lugares y acontecimientos.
+Un diario personal para enviar audios por **Telegram** y consultar tus recuerdos
+en una web con **Streamlit**. Whisper transcribe el audio, Ollama prepara su análisis
+y SQLite guarda las entradas. El procesamiento de IA es local por defecto.
 
-> 🎙️ **Cuenta tu día** → ✍️ **Se transcribe y analiza** → 🌸 **Revísalo en tu diario**
+> 🎙️ Cuenta tu día → ✍️ Se transcribe y analiza → 🌸 Revisa tus recuerdos
 
 ## ✨ Qué puedes hacer
 
-| En Telegram | En la web |
+| Apartado | Funciones actuales |
 | --- | --- |
-| Enviar notas de voz y audios | Explorar las entradas en un calendario |
-| Seguir el progreso del procesamiento | Leer transcripciones, resúmenes y análisis |
-| Reintentar si ocurre un error | Corregir la transcripción de una entrada |
-| Recibir avisos de inicio y apagado del bot | Buscar por texto y fechas, y consultar estadísticas |
+| **Telegram** | Enviar audios, elegir el día del diario, seguir el progreso y reintentar errores. |
+| **Entradas** | Consultar el calendario, añadir texto en un día concreto, editar y borrar entradas. |
+| **Mis personas** | Crear fichas y alias, revisar menciones y corregir las personas asociadas. |
+| **Buscador** | Buscar con lenguaje natural, texto literal o filtros; consultar entradas y días coincidentes. |
+| **Estadísticas** | Ver actividad, rachas, emociones, duración de audios y tu año en píxeles. |
 
-## Estadísticas
-
-La página **Estadísticas** permite elegir este mes, este año, todo el histórico
-o un periodo personalizado. Muestra entradas, días activos, medias por día y por
-día activo, rachas, frecuencia y emociones habituales. Las rachas se calculan
-dentro del periodo elegido; la actual admite que todavía no hayas grabado hoy.
-
-**Tu año en píxeles** es un apartado del menú lateral, con los meses en columnas
-verticales y su propio selector de año y muestra el sentimiento
-mayoritario de los audios analizados de cada día, o la cantidad de entradas.
-Los empates llevan trama; los días pendientes de análisis y sin entradas se
-distinguen. Pasa el cursor para ver el reparto y pulsa un píxel para consultar
-las entradas del día.
-
-Los nuevos audios conservan su duración aunque después se elimine el archivo.
-**Recuperar duraciones antiguas** lee los archivos locales todavía disponibles.
-Las métricas de duración indican su cobertura y excluyen los datos desconocidos.
-Al actualizar, reinicia tanto Streamlit como el bot para cargar el nuevo esquema.
-
-## Mis personas
-
-En la barra lateral de Streamlit, **Mis personas** permite mantener un registro
-editable con el nombre completo, alias, procedencia, residencia actual, relación,
-de qué conoces a cada persona y grupos. Añade filas al final de la tabla y pulsa
-**Guardar cambios**; **Descartar cambios** vuelve a cargar los datos guardados.
-Separa los alias con comas o `;`, por ejemplo `mamá, mami, mi madre`.
-Las listas antiguas introducidas en una sola celda se separan al actualizar,
-con copia de seguridad previa. Los grupos se seleccionan entre los existentes y también
-puedes crear etiquetas; se unifican las diferencias de mayúsculas y espacios.
-Solo el nombre completo es obligatorio y debe ser único en el registro.
-Para retirar una ficha sin perder sus vínculos, marca **Archivada**.
-
-Los nombres y alias únicos se vinculan al procesar entradas nuevas, conservando
-las transcripciones y las menciones originales. Las coincidencias usan palabras
-completas, sin distinguir mayúsculas, espacios ni tildes de las vocales: `mamá`
-y `mama` se reconocen igual, pero `ñ` sigue siendo distinta de `n`. Se admite la
-coma que puede introducir la transcripción en una expresión como `mi prima, Marta`.
-Si esa normalización produce un alias compartido, la mención requiere revisión.
-La detección de alias se guarda en cuanto termina la transcripción, incluso si
-después falla el análisis. No se adivinan apodos ni erratas no registradas.
-Los alias compartidos se dejan sin identificar salvo que haya una pista explícita
-y única en la misma expresión: por ejemplo, «mi prima Marta», «Marta, mi prima»,
-«Marta que vive en Valencia» o «Marta que es de Toledo». Para ello, guarda el alias
-«Marta» y la relación simple «prima», la residencia o la procedencia en su ficha.
-Mencionar Valencia cerca de Marta no basta para identificarla. Las pistas compartidas,
-contradictorias, interrogativas o condicionales se dejan para revisión. Las notas libres,
-los grupos y «de qué la conozco» no generan reglas automáticas.
-Archivar una persona detiene
-sus nuevas asociaciones y reserva sus alias para evitar atribuciones incorrectas.
-
-**Por organizar** recoge menciones existentes y nuevas que no tienen identidad.
-Puedes crear una ficha o añadir una mención como alias a una persona existente.
-Después, en **Propuestas del histórico**, pulsa **Buscar propuestas**, revisa las
-transcripciones, marca las asociaciones deseadas y pulsa **Aceptar seleccionadas**.
-Guardar un alias no aplica por sí solo esas propuestas ni regenera los análisis.
-Desde cada entrada, tanto en el calendario como en los resultados del buscador,
-**Editar personas** permite asignar o corregir la persona de cada mención y dejarla
-sin identificar. También puedes añadir una mención que aparezca en la transcripción
-y no se haya detectado. Estas correcciones afectan solo a esa entrada, se conservan
-al reanalizarla mientras siga apareciendo la mención y no crean alias globales.
-La selección se aplica a todas las apariciones de la misma expresión en esa entrada.
-
-En **Buscador**, escribe una frase como «días que he ido a la ofi este último mes»
-y pulsa **Buscar**. La pantalla muestra el periodo y los criterios entendidos;
-**Editar interpretación** permite corregirlos sin otra llamada al modelo.
-Las fechas relativas usan el día actual en `DIARY_TIMEZONE`: «último mes» significa
-un mes hacia atrás hasta hoy; «mes pasado», el mes natural anterior completo.
-Las expresiones habituales reconocidas completas se resuelven directamente; el
-resto se interpreta con Ollama usando un esquema validado y el catálogo existente.
-No se envían transcripciones al intérprete. `SEARCH_MODEL` permite elegir un modelo
-distinto del de análisis; `SEARCH_TIMEOUT_SECONDS` limita la espera (30 por defecto).
-Si Ollama falla, se muestra el fallo y sigue disponible la búsqueda literal.
-La calidad de las interpretaciones libres depende del modelo: debe evaluarse con
-`python -m evaluation.search --model-only` antes de darla por validada.
-
-«Días» agrupa las entradas coincidentes por su día del diario. Los criterios se
-aplican a la misma entrada. Los lugares son menciones indexadas, no pruebas de
-visitas; una emoción corresponde al análisis global de la entrada. «Ofi» se
-resuelve a «oficina» solo si el lugar existe y es único. Las ambigüedades requieren
-precisar la frase; no se inventan identidades. Los filtros tradicionales quedan
-plegados en **Búsqueda con filtros** y funcionan sin modelo.
-La comparación de alternativas y las limitaciones se detallan en
-[el diseño del buscador](docs/buscador-natural.md).
-
-Con **Buscar como texto literal**, buscar un nombre completo o cualquiera de sus alias encuentra
-las entradas de esa persona, aunque usen otro alias. También aparecen coincidencias
-con alias únicos en transcripciones antiguas aún sin asociar; esto no modifica el
-histórico. Las selecciones manuales, incluidas las menciones dejadas sin identificar,
-prevalecen sobre esas coincidencias. En los filtros manuales, **Buscar en todo el
-diario** está activado por defecto; desmárcalo para limitar las fechas.
-
-El selector **Persona** filtra por la identidad ya asociada, aunque
-la transcripción solo diga «mi prima». Se combina con las fechas y, opcionalmente,
-con el texto de búsqueda. También se puede buscar por el nombre canónico asociado.
-Las personas archivadas siguen disponibles para consultar su histórico. Una mención
-sin identificar no aparece bajo una persona hasta que se resuelva o se revise.
-
-Esta actualización elimina asociaciones duplicadas por expresiones solapadas del
-histórico, conservando las decisiones manuales y sin asignar nuevas identidades sin
-revisión. Las nuevas propuestas por contexto se aceptan en **Propuestas del histórico**.
-Reinicia tanto el bot como Streamlit para activar el nuevo identificador de personas.
-
-Al actualizar desde una versión anterior, Streamlit o el bot migran SQLite al
-arrancar. Se crea automáticamente una copia en la carpeta `backups` de la base de
-datos. La migración incorpora las menciones anteriores a **Por organizar**.
-
-Si actualizas el código con Streamlit abierto, detén su terminal con **Ctrl+C**
-y vuelve a ejecutar `uv run --group web streamlit run web_app.py` desde la carpeta
-del proyecto. Refrescar el navegador recarga la página, pero puede conservar módulos
-Python antiguos. Si el bot ya ha actualizado SQLite, la web mostrará instrucciones
-para reiniciarse cuando detecte una versión de esquema incompatible. Este reinicio
-no borra entradas y no requiere detener el bot.
-
-## 🌱 Primeros pasos
+## 🌱 Instalar y configurar
 
 Necesitas **Python 3.12 o superior**, **uv** y **Ollama**.
 Ejecuta los comandos desde la carpeta del proyecto.
-
-### 1. Instala las dependencias
 
 ```powershell
 uv sync --locked --group web
 ```
 
-### 2. Configura tu diario
-
-Si todavía no tienes un archivo `.env`, créalo a partir del ejemplo:
+Si todavía no tienes `.env`, créalo a partir del ejemplo:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Edita estos valores en `.env`:
+**Conserva tu `.env` si ya existe.** Configura estos valores sin subir credenciales a Git:
 
-| Variable | Qué debes indicar |
+| Variable | Contenido |
 | --- | --- |
-| `TELEGRAM_BOT_TOKEN` | El token de tu bot de Telegram |
-| `TELEGRAM_USER_ID` | Tu identificador numérico de usuario |
-| `OLLAMA_MODEL` | El modelo de análisis; por defecto, `qwen3:1.7b` |
+| `TELEGRAM_BOT_TOKEN` | Token de tu bot. |
+| `TELEGRAM_USER_ID` | Tu identificador numérico de Telegram. |
+| `OLLAMA_MODEL` | Modelo de análisis; por defecto, `qwen3:1.7b`. |
 
-**Conserva tu `.env` si ya existe:** no lo sobrescribas con el ejemplo ni lo subas a Git.
-El resto de opciones tiene valores predeterminados para empezar.
-
-### 3. Prepara el modelo de análisis
-
-Con Ollama instalado y en ejecución:
+Prepara el modelo con Ollama en ejecución:
 
 ```powershell
 ollama pull qwen3:1.7b
 ```
 
-Si cambias el modelo en `.env`, descarga ese mismo modelo en Ollama.
-Whisper descarga sus pesos cuando los necesita por primera vez; el primer audio
-puede tardar más.
+Si eliges otro modelo, descarga ese mismo. Whisper descarga sus pesos cuando los
+necesita por primera vez, por lo que el primer audio puede tardar más.
+
+El resto de opciones está en [`.env.example`](.env.example): zona horaria
+`Europe/Madrid`, Whisper `base`, límites de 20 MB y 30 minutos por audio y
+conservación de audios y copias durante siete días por defecto. `SEARCH_MODEL`
+permite elegir otro modelo para interpretar búsquedas y `SEARCH_TIMEOUT_SECONDS`
+limita su espera a 30 segundos por defecto.
+
+Si Whisper falla al usar CUDA, configura `WHISPER_DEVICE=cpu` y
+`WHISPER_COMPUTE_TYPE=int8`.
 
 ## 🚀 Arrancar el diario
 
-Abre **dos terminales** en la carpeta del proyecto.
+Abre dos terminales en la carpeta del proyecto. En el primer uso, arranca el bot
+antes que la web para crear la base de datos.
 
-### Terminal 1 · Bot de Telegram
+**Terminal 1 · Bot de Telegram**
 
 ```powershell
 uv run python -m src.bot
 ```
 
-Arranca primero el bot en el primer uso para que prepare la base de datos.
-Mantén una sola instancia del bot por token y base de datos.
-
-### Terminal 2 · Web de Streamlit
+**Terminal 2 · Web de Streamlit**
 
 ```powershell
 uv run --group web streamlit run web_app.py
 ```
 
-Mantén las terminales abiertas mientras uses cada servicio. Para detener uno,
-pulsa **Ctrl+C** en su terminal. El bot deja terminar la entrada activa antes de cerrar.
+Mantén las terminales abiertas. Para detener un servicio, pulsa **Ctrl+C**;
+el bot deja terminar la entrada activa antes de cerrar. Usa una sola instancia del bot.
 
-| Quiero… | Qué debe estar funcionando |
+| Para… | Necesitas… |
 | --- | --- |
-| Consultar las entradas ya guardadas | Streamlit |
-| Recibir y procesar nuevos audios | Bot y Ollama |
-| Corregir el texto y regenerar su análisis | Streamlit, bot y Ollama |
+| Consultar, crear o borrar entradas en la web | Streamlit. |
+| Recibir audios o analizar entradas nuevas y corregidas | Bot y Ollama. |
+| Interpretar búsquedas libres con el modelo | Streamlit y Ollama. |
+| Buscar por texto, filtros o frases cubiertas por reglas | Streamlit. |
 
-La web funciona en el mismo ordenador y todavía no dispone de inicio de sesión.
+La web es local y todavía no tiene inicio de sesión. Al actualizar el código,
+reinicia **el bot y Streamlit**; refrescar el navegador puede conservar módulos
+antiguos. Las migraciones crean una copia previa y conservan las entradas.
 
 ## 🎙️ Usar Telegram
 
-1. Abre el chat privado con tu bot y envía una **nota de voz o un audio**.
-2. Recibirás una confirmación. Si hay más entradas esperando, verás cuántas tienes delante.
-3. Un único mensaje se actualizará durante la descarga, transcripción y análisis.
-4. Al terminar, aparecerá **Entrada guardada** con un resumen breve.
+Envía una nota de voz o un audio al chat privado del bot. Recibirás confirmación
+y, si hay cola, el número de entradas que tienes delante. Un único mensaje muestra
+el día, la procedencia, el progreso y finalmente un resumen breve.
 
-Puedes enviar varios audios seguidos: se procesan por orden. Por defecto se admiten
-hasta **20 MB y 30 minutos** por audio. Los archivos enviados como documentos genéricos
-no se admiten.
+- Puedes enviar varios audios: se procesan por orden.
+- Si falla, pulsa **Reintentar**. La transcripción guardada se reutiliza.
+- Si no se detecta voz, envía otro audio. Los documentos genéricos no se admiten.
+- El bot atiende solo a tu usuario y avisa al arrancar y al apagarse de forma controlada.
 
-Si falla el procesamiento, pulsa **Reintentar**. La transcripción ya guardada se
-reutiliza; un fallo del análisis no la borra. Si no se detecta voz, envía otro audio.
+### Audios de otros días
 
-El bot atiende únicamente al usuario configurado en su chat privado. Al iniciarse y
-al detenerse de forma controlada envía un aviso; un cierre forzado o la falta de
-conexión pueden impedirlo. `/start` orienta sobre cómo enviar un audio; la consulta
-y la gestión de las entradas se realizan desde la web.
-
-## 🌸 Explorar la web
-
-### Entradas de otros días
-
-La **fecha del diario** es independiente de cuándo se crea o se envía una entrada.
-El calendario, el buscador, las estadísticas y **Tu año en píxeles** usan ese día.
-Las fechas de creación, recepción y envío se conservan en los datos de procesamiento.
-Las entradas antiguas mantienen el día que ya tenían al actualizar; se crea una copia
-previa de SQLite antes de migrar.
-
-En **Telegram**, antes de enviar el audio, escribe:
+Antes del audio, envía un mensaje como:
 
 ```text
 fecha 2026-10-20
 ```
 
-También se admite `fecha 20/10/2026`. El bot confirma el día y lo aplica **solo al
-siguiente audio aceptado**; después vuelve a usar el día del envío en Europe/Madrid.
-La selección se conserva si el bot se reinicia. Un audio rechazado por tamaño o
-duración no la consume. `fecha hoy` o `fecha cancelar` cancela la selección.
-Se permiten fechas desde 1900 hasta hoy, sin fechas futuras.
+También se admite `fecha 20/10/2026`. Espera la confirmación y envía el audio:
+la fecha se aplica **solo al siguiente audio aceptado**. Después vuelve al día del
+envío. `fecha hoy` o `fecha cancelar` cancela la selección.
 
-En la **web**, elige un día en el calendario de **Entradas** y pulsa el botón rosa
-**＋ Añadir entrada**. Escribe el texto y pulsa **Guardar entrada** o cancela.
-La entrada se guarda en ese día y el bot prepara el análisis cuando esté en marcha;
-no necesitas enviar un mensaje de Telegram. Puedes seguir viendo el texto mientras
-está pendiente y usar **Reintentar análisis** desde la web si falla.
-Al empezar a procesarla, el bot te avisa en Telegram indicando el día del diario y
-que procede de la web. El mismo mensaje se actualiza con el progreso y el resultado;
-los audios de Telegram también indican su día y procedencia. Si reinicias el bot,
-se reutiliza el mensaje de progreso guardado. Un fallo al avisar no impide el análisis.
+Se permiten fechas desde 1900 hasta hoy. La selección sobrevive a un reinicio
+y no se consume con un audio rechazado por tamaño o duración.
 
-**Borrar entrada** está disponible en el detalle, también desde las búsquedas.
-Pide confirmación y borra la entrada, sus asociaciones y el audio local. Las fichas
-de **Mis personas** se conservan. Una entrada en cola se puede borrar; si ya se está
-procesando, espera a que termine. Si el sistema bloquea el archivo de audio, su
-limpieza queda registrada para reintentarse en el mantenimiento. Las copias previas
-caducan según su retención habitual; el mensaje original de Telegram no se elimina.
+## 🌸 Usar la web
 
 ### Entradas
 
-Navega por el calendario con las **flechas** o los selectores de **mes y año**.
-Los días con entradas están marcados: pulsa uno para ver lo almacenado.
-Las fechas corresponden al día del diario: por defecto, el día del envío del audio,
-o el día que elegiste al crear una entrada retrospectiva.
+Elige un día en el calendario. Puedes moverte con las flechas o los selectores
+de mes y año, y consultar el texto, resumen, emociones, personas, lugares y acontecimientos.
 
-En cada entrada puedes consultar la transcripción, el resumen, las emociones,
-las personas, los lugares y los acontecimientos detectados.
+- **＋ Añadir entrada:** escribe una entrada para el día seleccionado y guárdala.
+- **Editar entrada:** corrige el texto; el original se conserva y el análisis se regenera.
+- **Editar personas:** corrige la identidad de una mención o déjala sin identificar.
+- **Borrar entrada:** confirma el borrado definitivo de la entrada y su audio local.
 
-**Editar entrada** permite corregir la transcripción completa y guardar o cancelar.
-El original se conserva y el análisis anterior se invalida. El bot recoge los cambios
-cada cinco segundos para regenerarlo; si está apagado, retomará las correcciones de
-entradas al arrancar, incluidas las creadas desde la web y las antiguas sin identidad
-de Telegram que tengan texto. No se pueden editar entradas pendientes o en procesamiento.
+El bot recoge entradas y correcciones pendientes cada cinco segundos mientras
+está activo y las recupera al arrancar. También avisa en Telegram cuando procesa
+una entrada web. Si el análisis falla, puedes reintentarlo desde la web.
+
+No se editan entradas pendientes o en procesamiento. Las entradas en cola se
+pueden borrar; si ya se están procesando, espera a que terminen. Las fichas de
+personas y las copias previas se conservan; el mensaje original de Telegram no se borra.
+Si el audio está bloqueado, su limpieza queda pendiente del mantenimiento.
+
+El calendario, el buscador y las estadísticas utilizan la **fecha del diario**,
+independiente de cuándo se creó o envió la entrada.
+
+### Mis personas
+
+Añade una ficha con nombre, relación, residencia, procedencia, grupos y alias.
+Solo el nombre es obligatorio; usa nombres distintos para distinguir las fichas.
+Separa los alias con comas o `;`, por ejemplo: `mamá, mami, mi madre`.
+
+Los nombres y alias se reconocen sin distinguir mayúsculas ni tildes de vocales.
+Las ambigüedades quedan pendientes salvo que haya una pista explícita y única,
+como «mi prima Marta». Las correcciones manuales se conservan al reanalizar.
+Una misma expresión comparte identidad en todas sus apariciones de esa entrada.
+
+**Por organizar** muestra menciones sin identificar. **Propuestas del histórico**
+permite revisar y aceptar asociaciones anteriores. **Archivada** retira una ficha
+de las nuevas asociaciones sin perder su histórico.
 
 ### Buscador
 
-Busca palabras o frases en transcripciones, resúmenes y acontecimientos, dentro de
-un periodo. La búsqueda no distingue mayúsculas de minúsculas.
+Escribe, por ejemplo, **«días con mamá el mes pasado»** y pulsa **Buscar**.
+La web muestra los criterios entendidos y los resultados; **Editar interpretación**
+permite corregirlos. Las frases habituales se resuelven con reglas y el resto
+se interpreta con Ollama. La interpretación libre todavía necesita mejorar y evaluarse.
 
-**Las preguntas en lenguaje natural todavía están pendientes de implementación.**
+- **Buscar como texto literal:** busca palabras, nombres y alias en todo el diario.
+- **Búsqueda con filtros:** combina fechas, persona, lugar, emoción, sentimiento,
+ origen y estado, sin depender del modelo.
+- Los nombres y alias pueden encontrar menciones únicas del histórico aún sin
+ confirmar. El selector **Persona** exige una asociación ya guardada.
 
-### Estadísticas
+«Último mes» significa un mes hacia atrás desde hoy; «mes pasado», el mes natural
+anterior. Los filtros se aplican a la misma entrada. Se cuentan entradas o días
+coincidentes: mencionar la oficina no demuestra haber ido allí.
 
-Consulta las entradas por día, los días con actividad, el estado del procesamiento
-y los sentimientos de las entradas analizadas. Son datos sobre lo registrado en el
-diario; no equivalen a un recuento de acontecimientos únicos.
+Esta versión todavía no genera respuestas resumidas con evidencias ni utiliza
+embeddings. Más detalles en [el diseño del buscador](docs/buscador-natural.md).
 
-Pulsa **Actualizar datos** para releer los cambios recientes.
+### Estadísticas y Tu año en píxeles
 
-## 🗂️ Datos, privacidad y copias
+Consulta actividad, días registrados, rachas, frecuencia, emociones y duración
+de audios por periodo. **Tu año en píxeles** muestra el sentimiento mayoritario
+o la cantidad de entradas de cada día; pulsa un píxel para ver sus entradas.
 
-- **Almacenamiento:** SQLite guarda las transcripciones, análisis y estados del proceso.
-- **Procesamiento:** faster-whisper transcribe y Ollama analiza localmente por defecto.
-  Los audios y las respuestas pasan por Telegram.
-- **Audios:** se conservan siete días por defecto; las transcripciones y los análisis permanecen.
-- **Copias:** el bot crea una copia local diaria de SQLite. Las copias caducan a los siete días
-  por defecto y no incluyen los audios.
-- **Mantenimiento:** la limpieza se ejecuta al arrancar el bot y cada hora mientras está activo.
-- **Actualizaciones:** las migraciones de la base crean una copia previa y conservan las entradas.
+Las duraciones desconocidas se indican y pueden recuperarse de los audios que
+todavía se conserven. Pulsa **Actualizar datos** para ver los cambios recientes.
+Las cifras describen lo registrado en el diario, no acontecimientos únicos.
 
-La base, los audios y las copias contienen información personal y no tienen cifrado
-propio. Guárdalos en una cuenta y disco con acceso controlado. Las copias locales
-no protegen frente a la pérdida del equipo: conserva también una copia fuera de él.
+## 🎓 Alcance del TFM
 
-Para restaurar, detén el bot y la web, conserva una copia de la base actual y sustituye
-el archivo configurado en `DATABASE_PATH` por una copia de seguridad. Después vuelve
-a arrancar los servicios. Los audios que hayan caducado no se recuperan.
+El TFM desarrolla un prototipo de diario personal por voz con cuatro componentes:
 
-<details>
-<summary>⚙️ Opciones de configuración</summary>
+1. **Captura y análisis:** recepción por Telegram, transcripción con Whisper,
+   resumen y extracción de sentimiento, emociones, personas, lugares y acontecimientos con un LLM.
+2. **Memoria organizada:** persistencia en SQLite, fichas y resolución de personas,
+   fechas del diario y una interfaz web para consultar y corregir los datos.
+3. **Consulta en lenguaje natural:** interpretación de preguntas como planes de
+   búsqueda validados, filtros temporales y recuperación de entradas o días.
+4. **Evaluación:** calidad de la transcripción y del análisis, interpretación de
+   búsquedas, fidelidad de los resúmenes, fallos y tiempos de respuesta.
 
-Todas las opciones están en [`.env.example`](.env.example). Las rutas relativas se
-resuelven desde la carpeta del proyecto.
+Hay pruebas automatizadas, un corpus sintético y herramientas de evaluación.
+**La validación final sigue pendiente:** requiere audios reales anotados, datos
+independientes, comparación de configuraciones y valoración humana de los resúmenes.
+La interpretación de búsquedas libres tampoco se considera validada todavía.
 
-| Opción | Valor predeterminado |
-| --- | --- |
-| Zona horaria | `Europe/Madrid` |
-| Modelo de transcripción | `base` |
-| Dispositivo de Whisper | `auto` |
-| Conservación de audios y copias | 7 días |
-| Límite por audio | 20 MB / 30 minutos |
+Las siguientes ampliaciones planteadas son acontecimientos estructurados para
+recuentos fiables, respuestas breves con fuentes y búsqueda por similitud conceptual.
+Los resúmenes semanales, exportaciones y acceso remoto también quedan pendientes.
 
-Si CUDA no está disponible o falla por incompatibilidad de bibliotecas, utiliza
-`WHISPER_DEVICE=cpu` y `WHISPER_COMPUTE_TYPE=int8`. PyTorch no es necesario para el bot.
-
-Para instalar las dependencias opcionales de los notebooks:
-
-```powershell
-uv sync --group notebooks --group web
-```
-
-</details>
-
-## 🧪 Pruebas y TFM
-
-Ejecuta las pruebas, incluida la interfaz web:
+## 🧪 Pruebas y evaluación
 
 ```powershell
 uv run --group web python -m pytest -q
 ```
 
-Las pruebas utilizan bases temporales, clientes simulados y credenciales ficticias:
-no envían mensajes reales ni consumen modelos.
+Las pruebas usan datos temporales y clientes simulados: no envían mensajes reales
+ni consumen modelos. Los experimentos de evaluación sí utilizan modelos reales:
 
-El directorio [`evaluation`](evaluation/README.md) contiene el corpus sintético,
-los experimentos con modelos reales y las métricas reproducibles del TFM.
-El corpus inicial sirve como comprobación, no como validación científica final.
+- [Evaluación de transcripción y análisis](evaluation/README.md).
+- [Resultados de desarrollo](evaluation/RESULTADOS_DESARROLLO.md).
+- [Diseño y evaluación del buscador](docs/buscador-natural.md).
+
+Para evaluar el intérprete de búsquedas forzando Ollama, incluso en las frases
+cubiertas por reglas:
+
+```powershell
+uv run python -m evaluation.search --model-only
+```
+
+## 🗂️ Datos y copias
+
+SQLite conserva los textos y análisis; los audios locales se guardan siete días
+por defecto. El bot crea una copia local diaria de SQLite, también con siete días
+de retención por defecto. Las copias no incluyen los archivos de audio.
+
+Whisper y Ollama procesan localmente por defecto, pero audios y mensajes pasan
+por Telegram. La base y las copias contienen información personal y no tienen
+cifrado propio. Conserva una copia fuera del equipo para protegerte ante su pérdida.
+
+Para restaurar, detén bot y web, conserva una copia de la base actual y sustituye
+el archivo de `DATABASE_PATH` por la copia elegida. Después arranca los servicios.
+Los audios caducados no se recuperan con la copia de SQLite.
